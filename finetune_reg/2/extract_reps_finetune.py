@@ -1,7 +1,6 @@
-base_dir = '/cfs/klemming/projects/supr/olfactory_alignment' 
-# base_dir='/proj/rep-learning-robotics/users/x_farzt'
+base_dir = '/proj' 
 import sys
-parent_dir=f"{base_dir}/MoLFormer_fMRI"
+parent_dir=f"{base_dir}/olfactory-fmri-alignment"
 sys.path.append(parent_dir)
 from transformers import AutoModel, AutoTokenizer
 from utils.helpers import *
