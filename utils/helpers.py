@@ -30,7 +30,7 @@ import selfies as sf
 #
 #
 #     return fmri_array_cleaned
-
+mid_dir='data'
 
 #get smiles from CID
 def get_smiles_from_cid(CIDs):
@@ -41,7 +41,7 @@ def get_smiles_from_cid(CIDs):
     return smiles_subject
 
 def read_CIDs(base_dir,subject_id):
-    mat1 = loadmat(f'{base_dir}/fmri/Fahime/behavior/behav_ratings_NEMO0{subject_id}.mat')
+    mat1 = loadmat(f'{base_dir}/fmri/{data}/behavior/behav_ratings_NEMO0{subject_id}.mat')
     CIDs = mat1['behav'][0][0]['cid']
     CIDs = CIDs.squeeze(1)
     CIDs = CIDs.tolist()
