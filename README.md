@@ -109,6 +109,6 @@ Extracts representations from finetuned models for use in transfer learning.
 - scikit-learn, NumPy, SciPy
 - SLURM for job scheduling
 
-Install dependencies:
+Create the environment from the exported YAML file:
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yml
