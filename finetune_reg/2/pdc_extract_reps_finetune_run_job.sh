@@ -9,7 +9,7 @@
 #SBATCH --mem=8G
 module purge
 module load miniconda3/24.7.1-0-cpeGNU-23.12
-source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
+source /proj/conda.init.sh
 conda activate fmri_proj
 export PYTHONNOUSERSITE=1
 
@@ -68,10 +68,10 @@ echo "Running: subject=$subject, n_folds=$n_fold, model=$model, behavior_embeddi
 echo "Using Python at: $(which python)"
 python -V
 
-PYTHON_EXEC=/cfs/klemming/projects/supr/olfactory_alignment/conda-dirs/envs/fmri_proj/bin/python
+PYTHON_EXEC=/proj/conda-dirs/envs/fmri_proj/bin/python
 echo "Running with Python: $PYTHON_EXEC"
 $PYTHON_EXEC -V
-$PYTHON_EXEC /cfs/klemming/projects/supr/olfactory_alignment/MoLFormer_fMRI/finetune_reg/2/extract_reps_finetune.py \
+$PYTHON_EXEC extract_reps_finetune.py \
     --model_name "$model_name" \
     --input_dir "May15_finetuned_reg" \
     --subject "$subject" \

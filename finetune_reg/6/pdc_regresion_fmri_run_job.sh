@@ -10,7 +10,7 @@
 # Load environment
 module purge
 module load miniconda3/24.7.1-0-cpeGNU-23.12
-source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
+source /proj/conda.init.sh
 conda activate fmri_proj
 export PYTHONNOUSERSITE=1
 
@@ -108,10 +108,10 @@ python -V
 echo "Running: fold=$fold, subject=$subject, epochs=$num_train_epochs, components=$c, model=$model, behavior_embedding=$behavior_embedding, unfreeze_last_n=$unfreeze_last_n, z_score=$z_score"
 echo "Using Python at: $(which python)"
 python -V
-PYTHON_EXEC=/cfs/klemming/projects/supr/olfactory_alignment/conda-dirs/envs/fmri_proj/bin/python
+PYTHON_EXEC=/proj/conda-dirs/envs/fmri_proj/bin/python
 echo "Running with Python: $PYTHON_EXEC"
 $PYTHON_EXEC -V
-$PYTHON_EXEC /cfs/klemming/projects/supr/olfactory_alignment/MoLFormer_fMRI/finetune_reg/6/regression_fmri.py \
+$PYTHON_EXEC regression_fmri.py \
   --subject "$subject" \
   --num_train_epochs "$num_train_epochs" \
   --n_components "$c" \
