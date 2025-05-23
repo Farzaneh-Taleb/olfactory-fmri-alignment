@@ -10,7 +10,7 @@
 # === Load environment ===
 module purge
 module load Mambaforge/23.3.1-1-hpc1-bdist
-source $(conda info --base)/etc/profile.d/conda.sh
+source /proj/conda.init.sh
 conda activate fmri_proj
 
 # === Define grid values ===
@@ -66,10 +66,10 @@ echo "Unfreeze layers: $unfreeze_layer"
 echo "Python path: $(which python)"
 python -V
 
-PYTHON_EXEC=/cfs/klemming/projects/supr/olfactory_alignment/conda-dirs/envs/fmri_proj/bin/python
+PYTHON_EXEC=/proj/conda-dirs/envs/fmri_proj/bin/python
 echo "Running with Python: $PYTHON_EXEC"
 $PYTHON_EXEC -V
-$PYTHON_EXEC /cfs/klemming/projects/supr/olfactory_alignment/MoLFormer_fMRI/finetune_reg/22/extract_reps_finetune_transfer.py \
+$PYTHON_EXEC extract_reps_finetune_transfer.py \
     --model_name "$model_name" \
     --input_dir "May15_finetuned_reg" \
     --subject "$subject" \

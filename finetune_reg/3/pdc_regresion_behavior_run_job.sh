@@ -10,7 +10,7 @@
 # Load environment
 module purge
 module load miniconda3/24.7.1-0-cpeGNU-23.12
-source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
+source /proj/conda.init.sh
 conda activate fmri_proj
 export PYTHONNOUSERSITE=1
 
