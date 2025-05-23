@@ -76,8 +76,6 @@ Extracts representations from finetuned models for use in transfer learning.
 
 ## Workflow Summary
 
-## Workflow Summary
-
 1. **Download fMRI Data**  
    Download the fMRI dataset from the [NEMO Scripts Repository](https://github.com/viveksgr/NEMO_scripts).
 
