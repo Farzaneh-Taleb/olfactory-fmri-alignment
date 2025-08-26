@@ -1,21 +1,63 @@
 #!/bin/bash
+# Improved submission script with retries and clearer logging
 
-# Load environment (optional)
-# source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
+source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
+source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
 
-# Define parameter grid
-subjects=(1 2 3)
-n_folds=(10)
-models=("ibm/MoLFormer-XL-both-10pct" "seyonec/ChemBERTa-zinc-base-v1" "HUBioDataLab/SELFormer" "jonghyunlee/ChemBERT_ChEMBL_pretrained")
-behavior_embeddings=("0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17")
-unfreeze_layers=(0)
+TASKS_PER_JOB=10
+chunk_size=1000
+sleep_between_batches=5
+sleep_between_retries=600
+dry_run=false  # set to true for testing without sbatch
 
-# Calculate total jobs
-total_jobs=$(( ${#subjects[@]} * ${#n_folds[@]} * ${#models[@]} * ${#behavior_embeddings[@]} * ${#unfreeze_layers[@]} ))
+total_configs=$(( ${#datasets[@]} * ${#subjects[@]} * ${#n_folds[@]} * ${#models[@]} \
+                * ${#behavior_embeddings[@]} * ${#unfreeze_layers[@]} \
+                * ${#lrs[@]} * ${#weight_decays[@]} * ${#batch_sizes[@]} ))
 
-echo "Submitting $total_jobs jobs..."
-echo "sbatch --array=0-$((total_jobs - 1)) pdc_reg_finetune_run_job.sh"
+total_tasks=$(( (total_configs + TASKS_PER_JOB - 1) / TASKS_PER_JOB ))
 
-# Submit the array job
-sbatch --array=0-$((total_jobs - 1)) pdc_reg_finetune_run_job.sh
-# sbatch --array=0-0 pdc_reg_finetune_run_job.sh  # For a single test run
+echo "[$(date)] Total configs: $total_configs"
+echo "[$(date)] Bundling $TASKS_PER_JOB per job => $total_tasks tasks"
+
+declare -a batches_to_submit=()
+for start in $(seq 0 $chunk_size $((total_tasks - 1))); do
+    batches_to_submit+=($start)
+done
+
+attempt=1
+while [ ${#batches_to_submit[@]} -gt 0 ]; do
+    echo "[$(date)] Attempt $attempt: ${#batches_to_submit[@]} batches to submit"
+
+    failed_batches=()
+    for start in "${batches_to_submit[@]}"; do
+        end=$((start + chunk_size - 1))
+        [ $end -ge $((total_tasks - 1)) ] && end=$((total_tasks - 1))
+        count=$((end - start + 1))
+
+        echo "[$(date)] Submitting batch: offset=$start count=$count"
+
+        if [ "$dry_run" = true ]; then
+            echo "DRY-RUN: sbatch --export=ALL,OFFSET=$start,TASKS_PER_JOB=$TASKS_PER_JOB --array=0-$((count-1)) pdc_reg_finetune_run_job.sh"
+        else
+            sbatch --export=ALL,OFFSET=$start,TASKS_PER_JOB=$TASKS_PER_JOB \
+                   --array=0-$((count-1)) pdc_reg_finetune_run_job.sh
+            submit_status=$?
+            if [ $submit_status -ne 0 ]; then
+                echo "[$(date)] Batch offset=$start FAILED (status=$submit_status), will retry."
+                failed_batches+=($start)
+            else
+                echo "[$(date)] Batch offset=$start submitted successfully."
+            fi
+            sleep "$sleep_between_batches"
+        fi
+    done
+
+    batches_to_submit=("${failed_batches[@]}")
+    if [ ${#batches_to_submit[@]} -gt 0 ]; then
+        echo "[$(date)] Some batches failed (${#batches_to_submit[@]}). Retrying in $sleep_between_retries seconds..."
+        sleep "$sleep_between_retries"
+        attempt=$((attempt+1))
+    else
+        echo "[$(date)] All batches submitted successfully!"
+    fi
+done
