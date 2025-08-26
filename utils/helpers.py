@@ -1,3 +1,6 @@
+
+
+
 import pandas as pd
 import numpy as np
 import ast
@@ -9,57 +12,20 @@ import torch
 import pubchempy as pcp
 from scipy.io import loadmat
 import selfies as sf
-# def read_fmri_avgSingleTrial_peak(base_dir, subject_id, selected_roi):
-#     # Load the data
-#     parent_input_sagar_original = f'{base_dir}/fmri/average_of_singletrial/fmri_{subject_id}_{selected_roi}.csv'
-#     df = pd.read_csv(parent_input_sagar_original)
-#     df = df.sort_values(by='CID')
-#
-#     # Create fMRI array (CIDs as rows, voxels as columns)
-#     fmri_array = df.pivot(index='CID', columns='voxel', values='fmri')
-#
-#
-#
-#
-#     # Convert the cleaned DataFrame to a numpy array
-#     fmri_array_cleaned = fmri_array.to_numpy()
-#
-#     #replace nan with 0
-#     fmri_array_cleaned = np.nan_to_num(fmri_array_cleaned)
-#
-#
-#
-#     return fmri_array_cleaned
+import sys
+import os, glob, re
+import pandas as pd
+from sklearn.model_selection import KFold
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import Dataset as TorchDataset
+from .data_loader import load_behavior_embeddings
+from datasets import Dataset as HFDataset
+from .config import BASE_DIR
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from .config import SEED
 mid_dir='data'
 
-#get smiles from CID
-def get_smiles_from_cid(CIDs):
-    smiles_subject = []
-    for cid in CIDs:
-        compound =  pcp.Compound.from_cid(cid)
-        smiles_subject.append(compound.canonical_smiles)
-    return smiles_subject
-
-def read_CIDs(base_dir,subject_id):
-    mat1 = loadmat(f'{base_dir}/fmri/{data}/behavior/behav_ratings_NEMO0{subject_id}.mat')
-    CIDs = mat1['behav'][0][0]['cid']
-    CIDs = CIDs.squeeze(1)
-    CIDs = CIDs.tolist()
-    
-    smiles_subject = get_smiles_from_cid(CIDs)
-    
-    return CIDs, smiles_subject
-
-def smiles_to_selfies(smiles):
-    """Convert SMILES to SELFIES"""
-    selfies=[]
-    for smile in smiles:
-        selfies_str = sf.encoder(smile)
-        selfies.append(selfies_str)
-    return selfies
-
-
-def set_seeds(seed=2024):
+def set_seeds(seed=SEED):
     # Set environment variable for hash-based operations
     os.environ['PYTHONHASHSEED'] = str(seed)
 
@@ -79,10 +45,11 @@ def set_seeds(seed=2024):
     # Configure cuDNN for deterministic behavior
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-def create_nc_mask(base_dir,subject,roi,threshold=0.3):
+    
+def create_nc_mask(BASE_DIR,subject,roi,threshold=0.3):
 
     #loading noise_ceiling
-    noise_ceiling = pd.read_csv(f'{base_dir}/fmri/noise_ceiling_session/noise_ceiling_session_{subject}_{roi}.csv')
+    noise_ceiling = pd.read_csv(f'{BASE_DIR}/fmri/noise_ceiling_session/noise_ceiling_session_{subject}_{roi}.csv')
     noise_ceiling.rename(columns={'fmri':'nc'}, inplace=True)
     noise_ceiling['nc_corrected'] = np.sqrt((2/(1+np.sqrt(1/noise_ceiling['nc']**2))))
     noise_ceiling['nc_corrected'] = np.where(np.isinf(noise_ceiling['nc_corrected']), 0, noise_ceiling['nc_corrected'])
@@ -97,13 +64,13 @@ def create_nc_mask(base_dir,subject,roi,threshold=0.3):
 
     mask_1d=np.array(mask_1d)
     # print(mask_1d.shape,"nc shape")
-    _,mask_3d = to3d(base_dir,mask_1d,subject,roi)
+    _,mask_3d = to3d(BASE_DIR,mask_1d,subject,roi)
     return  mask_3d
 
 
 
-def mask_fmri(base_dir,fmri,nc_mask_array,subject,roi,nc_mask,func_mask):
-    path_ROI = f'{base_dir}/fmri/supportings/S{subject}/'
+def mask_fmri(BASE_DIR,fmri,nc_mask_array,subject,roi,nc_mask,func_mask):
+    path_ROI = f'{BASE_DIR}/fmri/supportings/S{subject}/'
     # Load the NIfTI mask file
     #load the whole brain mask
     maskfile = f'rw{roi}.nii'
@@ -135,7 +102,7 @@ def mask_fmri(base_dir,fmri,nc_mask_array,subject,roi,nc_mask,func_mask):
         result_reduce = np.logical_and.reduce([mask_data, mask_img_anat, nc_mask_array]) 
     else:
         result_reduce = np.logical_and.reduce([mask_data, mask_img_anat])
-    _,mask_1d = from3d(base_dir,result_reduce,subject,roi)
+    _,mask_1d = from3d(BASE_DIR,result_reduce,subject,roi)
 
 
     #read fmri data
@@ -182,9 +149,9 @@ def df_to_cid_voxel_array(df,tr):
 
     return fmri_array_cleaned
 
-def read_fmri_avgSingleTrial_peak(base_dir, subject_id, selected_roi):
+def read_fmri_avgSingleTrial_peak(BASE_DIR, subject_id, selected_roi):
     # Load the data
-    parent_input_sagar_original = f'{base_dir}/fmri/average_of_singletrial/fmri_{subject_id}_{selected_roi}.csv'
+    parent_input_sagar_original = f'{BASE_DIR}/fmri/average_of_singletrial/fmri_{subject_id}_{selected_roi}.csv'
     df = pd.read_csv(parent_input_sagar_original)
     # if dro_voxels is not None:
     #     #drop voxels that are not in the mask
@@ -208,9 +175,9 @@ def read_fmri_avgSingleTrial_peak(base_dir, subject_id, selected_roi):
     return fmri_array_cleaned
 
 
-def read_fmri_avgSingleTrial_dropna(base_dir, subject_id, selected_roi,dro_voxels=None):
+def read_fmri_avgSingleTrial_dropna(BASE_DIR, subject_id, selected_roi,dro_voxels=None):
     # Load the data
-    parent_input_sagar_original = f'{base_dir}/fmri/average_of_singletrial/fmri_{subject_id}_{selected_roi}.csv'
+    parent_input_sagar_original = f'{BASE_DIR}/fmri/average_of_singletrial/fmri_{subject_id}_{selected_roi}.csv'
     df = pd.read_csv(parent_input_sagar_original)
 
 
@@ -230,10 +197,17 @@ def read_fmri_avgSingleTrial_dropna(base_dir, subject_id, selected_roi,dro_voxel
 
     return fmri_array_cleaned
 
-def read_orig_avg(base_dir, subject_id, selected_roi,tr):
+def read_fmri(BASE_DIR, participant_id, selected_roi,tr):
     # % Max FIR times for [PirF, PirT, AMY and OFC];
     # P = [[5, 5, 5], [4, 4, 5], [4, 3, 4], [3, 3, 5]]
-    parent_input_sagar_original = base_dir + f'/fmri/NEMO_scripts-master/odor_responses_S1-3_regionized/odor_responses_S{subject_id}.mat'
+    parent_input_sagar_original = BASE_DIR + f'/fmri/NEMO_scripts-master/odor_responses_S1-3_regionized/odor_responses_S{participant_id}.mat'
+        # --- Load CSV as DataFrame ---
+    df_behavior = pd.read_csv(f"{BASE_DIR}/DATASETS/datasets/sagar2023/sagar2023_data.csv")
+    df_behavior = df_behavior[df_behavior["participant_id"] == participant_id].copy()
+
+    # --- Sort by cid first ---
+    df_behavior = df_behavior.sort_values(by="cid").reset_index(drop=True)
+    cids = df_behavior['cid'].to_list()              
     data = sio.loadmat(parent_input_sagar_original)
 
     if selected_roi == 'PirF':
@@ -255,8 +229,9 @@ def read_orig_avg(base_dir, subject_id, selected_roi,tr):
 
 
     roi = np.moveaxis(roi, -1, 0)
+
     # print("sssss",roi.shape)
-    return roi
+    return roi,cids
 
 def prepare_dataset(ds):
     if 'y' in ds.columns:
@@ -265,9 +240,9 @@ def prepare_dataset(ds):
     return ds
 
 
-def read_pom(base_dir, CIDs):
+def read_pom(BASE_DIR, CIDs):
     embedding_open_pom = '/alignment_olfaction_datasets/curated_datasets/embeddings/pom/sagar_pom_embeddings_Apr17.csv'
-    ds_pom = pd.read_csv(base_dir + embedding_open_pom)
+    ds_pom = pd.read_csv(BASE_DIR + embedding_open_pom)
     ds_pom = prepare_dataset(ds_pom)
 
     ds_pom = ds_pom.sort_values(by='CID')
@@ -290,15 +265,15 @@ def npy2nii( data_array,roi, subject,dir='' , title='', save=True):
 
     # Save the new NIfTI image
     # output_file_path = 'path/to/output_file.nii'  # Output NIfTI file path
-    # nib.save(new_img, f"{base_dir}/fmri/metrics_avgsingletrial/subj_{subject}_{roi}_{model}_{layer}_{title}_metrics.nii")
+    # nib.save(new_img, f"{BASE_DIR}/fmri/metrics_avgsingletrial/subj_{subject}_{roi}_{model}_{layer}_{title}_metrics.nii")
     if save:
         nib.save(new_img, f"{dir}/{roi}+{subject}_{title}.nii")
 
     return new_img
 
-def from3d(base_dir,newVOL, subject, roi):
+def from3d(BASE_DIR,newVOL, subject, roi):
     # path_ROI = f'../../../../T5 EVO/fmri/supportings/S{subject}/'
-    path_ROI = f'{base_dir}/fmri/supportings/S{subject}/'
+    path_ROI = f'{BASE_DIR}/fmri/supportings/S{subject}/'
     maskfile = f'rw{roi}.nii'
     # Load the NIfTI mask file
     mask_img = nib.load(path_ROI + maskfile)
@@ -317,8 +292,8 @@ def from3d(base_dir,newVOL, subject, roi):
 
     return mask_img, data_array_reversed
 
-def to3d(base_dir,data_array, subject,roi):
-    path_ROI = f'{base_dir}/fmri/supportings/S{subject}/'
+def to3d(BASE_DIR,data_array, subject,roi):
+    path_ROI = f'{BASE_DIR}/fmri/supportings/S{subject}/'
     maskfile = f'rw{roi}.nii'
     # Load the NIfTI mask file
     mask_img = nib.load(path_ROI + maskfile)
@@ -383,17 +358,17 @@ def f_test(X, y, estimator):
 
     return F, p_value
 
-def find_overlap(base_dir, ds, subject_source):
+def find_overlap(BASE_DIR, ds, subject_source):
     subjects = [1, 2, 3]
     subjects.remove(subject_source)
-    smiles_df_1 = pd.read_csv(f"{base_dir}/embeddings{ds}/CIDs_smiles_selfies_{subject_source}{ds}.csv")
+    smiles_df_1 = pd.read_csv(f"{BASE_DIR}/embeddings{ds}/CIDs_smiles_selfies_{subject_source}{ds}.csv")
     # Get the CIDs from the source DataFrame
     cids_1 = smiles_df_1['CIDs']
     cids_rest = []
 
     # Collect CIDs from the remaining subjects
     for subject in subjects:
-        smiles_df_dest = pd.read_csv(f"{base_dir}/embeddings{ds}/CIDs_smiles_selfies_{subject}{ds}.csv")
+        smiles_df_dest = pd.read_csv(f"{BASE_DIR}/embeddings{ds}/CIDs_smiles_selfies_{subject}{ds}.csv")
         cids_2 = smiles_df_dest['CIDs']
         cids_rest.append(set(cids_2))
 
@@ -401,3 +376,161 @@ def find_overlap(base_dir, ds, subject_source):
     overlapping_indices = [idx for idx, cid in enumerate(cids_1) if all(cid in cids_set for cids_set in cids_rest)]
 
     return overlapping_indices,cids_1
+
+
+
+def common_cids_per_ds(BASE_DIR, ds):
+    """
+    Return a sorted list of CIDs that appear in ALL subjects for this dataset (ds).
+    Looks under: {BASE_DIR}/embeddings/{ds}/
+    """
+    emb_dir = os.path.join(BASE_DIR, "datasets", ds)
+
+    # Try to find per-subject CSVs
+    cid_sets = []
+
+  
+    combined = os.path.join(emb_dir, f"{ds}_data.csv")
+    
+    df = pd.read_csv(combined)
+    cid_col ="cid"
+    pid_col = "participant_id"
+    df = df[[pid_col, cid_col]]
+    for _, g in df.groupby("participant_id"):
+        cids=set(g["cid"].tolist())
+        print(len(cids))
+        cid_sets.append(cids)
+    
+
+    if not cid_sets:
+        return []
+    
+    filtered = []
+    common = set.intersection(*cid_sets)
+    for cid in common:
+        try:
+            filtered.append(int(cid))
+        except (ValueError, TypeError):
+            continue
+    # return as sorted strings (or map to int if you prefer)
+    return sorted(filtered, key=lambda x: int(x))
+
+
+
+def save_fold_indices(BASE_DIR, n_fold,ds):
+    
+    common_cids = common_cids_per_ds(BASE_DIR,ds)
+    print("ds",ds,len(common_cids))
+    kf = KFold(n_splits=n_fold, shuffle=True, random_state=SEED)
+    
+    rows = []
+    for fold_idx, (train_idx, test_idx) in enumerate(kf.split(common_cids)):
+        # map indices -> actual CID values
+        train_c = [str(common_cids[i]) for i in train_idx]
+        test_c  = [str(common_cids[i]) for i in test_idx]
+
+        
+        for cid in train_c:
+            rows.append({
+                "cid": cid,
+                "set": "train",
+                "n_fold": n_fold,
+                "fold_idx": fold_idx,
+                "ds": ds
+            })
+        for cid in test_c:
+            rows.append({
+                "cid": cid,
+                "set": "test",
+                "n_fold": n_fold,
+                "fold_idx": fold_idx,
+                "ds": ds
+            })
+    
+    all_folds_df = pd.DataFrame(rows)
+    all_folds_df.to_csv(
+        f"{BASE_DIR}/folds/fold_indices_ds-{ds}_nfold-{n_fold}.csv", index=False)
+
+
+def get_descriptors(ds):
+    if ds =='bierling2025':
+        return ['intensity','pleasantness','familiar','edible', 'warm','sour', 'cold','sweet','fruit','spices','bakery','garlic', 'fish', 
+                    'burnt', 'decayed', 'grass', 'wood', 'chemical','flower', 'musky', 'sweaty', 'ammonia']
+    elif ds == 'keller2016':
+        return['intensive', 'pleasant','familiar','edible','bakery','sweet','fruit','fish','garlic','spices','cold','sour',
+               'burnt','acid','warm','musky','sweaty','ammonia','decayed','wood','grass','flower','chemical']
+    elif ds== 'sagar2023_v1':
+        pass
+    elif ds == 'sagar2023_v2':
+        pass
+    elif ds == 'sagar2023':
+        return [ 'intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky',
+    'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']
+    else:
+        raise ValueError("Unsupported dataset: {}".format(ds))
+    
+    
+
+
+
+
+
+
+def _load_text_for_cids(ds, cids,participant_id, input_type: str) -> pd.Series:
+    """
+    Returns a Series of molecule strings in the order of `cids`.
+    input_type ∈ {'smiles','selfies'}.
+    """
+    df = pd.read_csv(f"{BASE_DIR}/DATASETS/datasets/{ds}/{ds}_data.csv")
+    df = df[df["participant_id"]==participant_id].copy()
+    df = df[df["cid"].isin(cids)].copy()
+
+    # enforce provided CID order
+    df = df.set_index("cid").loc[cids].reset_index()
+    print(input_type)
+    return df[input_type].reset_index(drop=True)
+
+
+def build_hf_text_dataset_for_cids(
+    ds: str,
+    participant_id,
+    behavior_embeddings,   # whatever your loader accepts (indices or names)
+    cids,
+    input_type
+):
+    """
+    Returns (hf_dataset, num_targets) where hf_dataset has:
+      - a text column named exactly input_type ('smiles' or 'selfies')
+      - columns prop0..propK-1 (behavior targets)
+    Row order matches `cids`.
+    """
+    # y: your existing loader (handles selection/aggregation)
+    y_np = load_behavior_embeddings(
+        ds=ds,
+        cids=cids,
+        participant_id=participant_id,
+        embed_cols=behavior_embeddings,
+        group_by_cid=True,
+    )
+    print("y_np",y_np)
+    
+    print(behavior_embeddings)
+    y_df = pd.DataFrame(y_np, columns=behavior_embeddings)
+    print("y_df1",y_df)
+
+    # rename behavior columns to prop0..propK-1
+    rename_map = {col: f"prop{i}" for i, col in enumerate(behavior_embeddings)}
+    y_df = y_df.rename(columns=rename_map)
+    print("y_df2",y_df)
+    # x: molecule strings (Series aligned to cids order)
+    texts = _load_text_for_cids( ds, cids,participant_id, input_type=input_type)
+
+    # assemble HF dataset (text + props only)
+    df = pd.DataFrame({input_type: texts}).reset_index(drop=True)
+    print("df1",df)
+    df = pd.concat([df, y_df.reset_index(drop=True)], axis=1)
+    print("df2",df)
+
+    ds_hf = HFDataset.from_pandas(df)
+    print("ffffff", ds_hf.to_pandas().isna().sum())
+    return ds_hf, len(behavior_embeddings)
