@@ -1,76 +1,26 @@
 #!/bin/bash
 
-# Load environment
+# reset modules
 source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
 
-# Define parameter grids
-folds=(5)
-subjects=(1 2 3)
-nums_train_epochs=(40)
-n_components=(None 30)
-# models=("MoLFormer-XL-both-10pct" "ChemBERTa-zinc-base-v1" "SELFormer" "ChemBERT_ChEMBL_pretrained")
-models=("behavior" "MoLFormer-XL-both-10pct" "ChemBERTa-zinc-base-v1" "SELFormer" "ChemBERT_ChEMBL_pretrained")
-behavior_embeddings=("0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17")
-unfreeze_layers=(0)
-rois=("PirF" "PirT" "AMY" "OFC")
-nc_masks=(False)
-func_masks=(True)
-trs=(0 1 2 3 4 5 -1)
-read_styles=('avg_orig')
-z_scores=(True)
+# load fmri grid
+source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_grid.sh"
 
+compute_total() {
+  echo $(( ${#datasets[@]} * ${#subjects[@]} * ${#folds[@]} \
+         * ${#n_components[@]} * ${#models[@]} * ${#rois[@]} \
+         * ${#trs[@]} * ${#z_scores[@]} ))
+}
 
-# Calculate total combinations
-total_jobs=$(( ${#subjects[@]} * ${#folds[@]} * ${#nums_train_epochs[@]} * ${#n_components[@]} * ${#behavior_embeddings[@]} * ${#models[@]} * ${#unfreeze_layers[@]} * ${#rois[@]} * ${#nc_masks[@]} * ${#func_masks[@]} * ${#trs[@]} * ${#read_styles[@]} * ${#z_scores[@]} ))
+mkdir -p logs
+total_jobs=$(compute_total)
 
-# Settings
-chunk_size=1000         # Jobs per array
-sleep_between_batches=5    # Seconds between individual batches
-sleep_between_retries=600  # Seconds between full retries if anything fails (10 minutes)
+export RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+export OUT_DIR="${OUT_DIR:-May15_reg}"
 
-# Initialize all batches
-declare -a batches_to_submit=()
+echo "RUN_ID=${RUN_ID}"
+echo "OUT_DIR=${OUT_DIR}"
+echo "Submitting $total_jobs jobs..."
 
-for start in $(seq 0 $chunk_size $((total_jobs - 1))); do
-    batches_to_submit+=($start)
-done
-
-echo "📦 Initial total batches: ${#batches_to_submit[@]}"
-
-# Keep retrying until no batches left
-while [ ${#batches_to_submit[@]} -gt 0 ]; do
-    echo "New submission pass: ${#batches_to_submit[@]} batches to submit"
-
-    failed_batches=()
-
-    for start in "${batches_to_submit[@]}"; do
-        end=$((start + chunk_size - 1))
-        if [ $end -ge $total_jobs ]; then
-            end=$((total_jobs - 1))
-        fi
-        count=$((end - start + 1))
-
-        echo "Submitting batch: offset=$start, count=$count..."
-        sbatch --export=OFFSET=$start,COUNT=$count --array=0-$((count-1)) pdc_regresion_fmri_run_job.sh
-        submit_status=$?
-
-        if [ $submit_status -ne 0 ]; then
-            echo "Batch starting at offset=$start failed, will retry later."
-            failed_batches+=($start)
-        else
-            echo "Batch starting at offset=$start submitted successfully."
-        fi
-
-        sleep "$sleep_between_batches"
-    done
-
-    # Update which batches still need to be retried
-    batches_to_submit=("${failed_batches[@]}")
-
-    if [ ${#batches_to_submit[@]} -gt 0 ]; then
-        echo "Some batches failed. Waiting $sleep_between_retries seconds before next retry round..."
-        sleep "$sleep_between_retries"
-    else
-        echo "All batches submitted successfully!"
-    fi
-done
+sbatch --array=0-$((total_jobs-1)) "$(dirname "$0")/pdc_regresion_fmri_run_job.sh"
+# sbatch --array=0-1 "$(dirname "$0")/pdc_regresion_fmri_run_job.sh"
