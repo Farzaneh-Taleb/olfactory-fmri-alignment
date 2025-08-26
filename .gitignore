@@ -1,0 +1,9 @@
+finetune_reg/00_chem_fmri/logs/*
+finetune_reg/0_chem_behavior/logs/*
+finetune_reg/1_hyperparameter_search/logs/*
+finetune_reg/3_finetunedchem_behavior/logs/*
+finetune_reg/22_extract_reps_after_finetuning_for_transfer/logs/*
+finetune_reg/4_finetunedchem_fmri/logs/*
+finetune_reg/5_transfer_behavior/logs/*
+finetune_reg/6_transfer_fmri/logs/*
+finetune_reg/1_finetune_by_behavior/*
