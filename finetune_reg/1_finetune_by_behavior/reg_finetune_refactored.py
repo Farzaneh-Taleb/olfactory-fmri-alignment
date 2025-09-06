@@ -3,7 +3,7 @@ import os
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(os.path.dirname(current_dir))
 sys.path.append(parent_dir)
-
+import json
 from utils.config import BASE_DIR, SEED
 from utils.helpers import *  # includes run_permutation_significance
 from utils.model_config import MODELS, LAYERS_END, INPUT_TYPES_CAN, INPUT_TYPES_ISO
@@ -70,28 +70,29 @@ def compute_metrics(eval_pred) -> Dict[str, float]:
 
 class MSETrackingCallback(TrainerCallback):
     """Callback to track MSE during training."""
-    def __init__(self, test_dataset, mse_tracking, fold_id):
-        self.test_dataset = test_dataset
+    def __init__(self, val_dataset, mse_tracking, fold_id):
+        self.val_dataset = val_dataset
         self.mse_tracking = mse_tracking
         self.fold_id = fold_id
         self.trainer = None
 
     def on_epoch_end(self, args, state, control, **kwargs):
         epoch = int(state.epoch)
-        test_results = self.trainer.predict(self.test_dataset)
-        preds = test_results.predictions
-        labels = test_results.label_ids
-        mse = ((preds - labels) ** 2).mean(axis=0)
-        print("mse",mse)
+        val_results = self.trainer.evaluate(eval_dataset=self.val_dataset)
+        # preds = test_results.predictions
+        # labels = test_results.label_ids
+        # mse = ((preds - labels) ** 2).mean(axis=0)
 
         mse_dict = {
             "fold": self.fold_id,
             "epoch": epoch,
-            "mean_mse": float(mse.mean())
+            "mean_mse": float(val_results["eval_mse_mean"])
         }
-        mse_dict.update({f"mse_{i}": float(m) for i, m in enumerate(mse)})
+        # mse_dict.update({f"mse_{i}": float(m) for i, m in enumerate(mse)})
         self.mse_tracking.append(mse_dict)
         return control
+    
+        
 
 
 
@@ -101,9 +102,18 @@ class FinalPredictionCallback(TrainerCallback):
         self.test_dataset = test_dataset
         self.global_preds = global_preds
         self.global_labels = global_labels
-        self.trainer = None
+        # self.trainer = None
 
     def on_train_end(self, args, state, control, **kwargs):
+        trainer = self.trainer
+        if state.best_model_checkpoint is not None:
+            trainer.model = AutoModelForSequenceClassification.from_pretrained(
+                state.best_model_checkpoint,
+                num_labels=trainer.model.config.num_labels,
+                trust_remote_code=True
+            )
+            print(f"Loading best model from {state.best_model_checkpoint}")
+            trainer.model.to(trainer.args.device)
         # With load_best_model_at_end=True, best weights are already loaded
         test_results = self.trainer.predict(self.test_dataset)
         preds = test_results.predictions
@@ -122,7 +132,7 @@ def create_model_and_freeze_layers(model_name_path, num_targets, unfreeze_last_n
     model.config.problem_type = "regression"
     
     # Freeze layers except the last N
-    if unfreeze_last_n and unfreeze_last_n > 0:
+    if unfreeze_last_n is not None:
         try:
             total_layers = max([
                 int(name.split("encoder.layer.")[1].split(".")[0])
@@ -152,6 +162,29 @@ def create_model_and_freeze_layers(model_name_path, num_targets, unfreeze_last_n
     return model
 
 
+class WeightedHuberTrainer(Trainer):
+    def __init__(self, *args, target_weights=None, huber_delta=1.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        if target_weights is not None:
+            self.target_weights = torch.tensor(target_weights, dtype=torch.float32)
+        else:
+            self.target_weights = None
+        self.huber_delta = float(huber_delta)
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")  # (B, K)
+        outputs = model(**inputs)
+        logits = outputs.logits  # (B, K) or (B,1,K)
+        if logits.ndim == 3 and logits.size(1) == 1:
+            logits = logits[:, 0, :]
+        diff = logits - labels
+        abs_diff = diff.abs()
+        delta = self.huber_delta
+        huber = torch.where(abs_diff <= delta, 0.5 * diff**2, delta * (abs_diff - 0.5 * delta))
+        if self.target_weights is not None:
+            huber = huber * self.target_weights  # broadcast over K
+        loss = huber.mean()
+        return (loss, outputs) if return_outputs else loss
 
 
 
@@ -162,6 +195,12 @@ def main():
 
     args = parser.parse_args()
     args = parse_common_args(args)
+    if args.embed_type=='can':
+        input_type = INPUT_TYPES_CAN
+    elif args.embed_type=='iso':
+        input_type = INPUT_TYPES_ISO
+        
+    
 
     # Extract parameters
     model_name = args.model
@@ -169,6 +208,12 @@ def main():
     n_fold = args.n_fold
     
     unfreeze_last_n = args.unfreeze_last_n
+    if unfreeze_last_n in (None, "", "None"):
+    # nothing to unfreeze
+        print("No layers will be unfrozen.")
+    else:
+        unfreeze_last_n = int(unfreeze_last_n)
+    print(f"Unfreezing last {unfreeze_last_n} layers")
     num_train_epochs = args.num_train_epochs
     out_dir = args.out_dir
     ds = args.ds
@@ -177,19 +222,19 @@ def main():
     weight_decay = args.weight_decay
     batch_size = args.per_device_train_batch_size
     model_name_path = args.model
-    print("mmm", model_name_path)
     model_path = model_name_path.split('/')[0]
     model_name = model_name_path.split('/')[1]
-    input_type = INPUT_TYPES_CAN.get(model_name)
-    print("innnnn",input_type)
+    input_type = input_type.get(model_name)
+    run_id = os.environ.get("RUN_ID")
     # layer arg can exist but is unused for text fine-tuning
 
     # Create output directories
-    out_base = Path(BASE_DIR) / f"{out_dir}_finetune_metrics"
-    models_base = Path(BASE_DIR) / f"{out_dir}_finetune_models"
+    out_base = Path(BASE_DIR) / f"{out_dir}_finetune_metrics_{run_id}"
+    models_base = Path(BASE_DIR) / f"{out_dir}_finetune_models_{run_id}"
     out_base.mkdir(parents=True, exist_ok=True)
     models_base.mkdir(parents=True, exist_ok=True)
-    out_file = out_base / f"metrics_model-{model_name}_ds-{ds}.csv"
+    
+    out_file = out_base / f"metrics_model-{model_name}_ds-{ds}_runid-{run_id}.csv"
 
     # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name_path, trust_remote_code=True)
@@ -227,7 +272,6 @@ def main():
         test_dataset  = test_dataset.remove_columns([c for c in test_dataset.column_names if c not in keep_cols])
 
         K = num_targets  # <- not behavior_embeddings
-        print(len(train_dataset))
 
         # quick check on first example
         first_lbl = train_dataset[0]["labels"]
@@ -259,10 +303,32 @@ def main():
         )
 
         # Set up callbacks
-        mse_callback = MSETrackingCallback(test_dataset, mse_tracking, i_fold)
+        mse_callback = MSETrackingCallback(val_dataset, mse_tracking, i_fold)
         pred_callback = FinalPredictionCallback(test_dataset, global_preds, global_labels)
 
-        trainer = Trainer(
+        # trainer = Trainer(
+        #     model=model,
+        #     args=training_args,
+        #     tokenizer=tokenizer,
+        #     train_dataset=train_dataset,
+        #     eval_dataset=val_dataset,
+        #     data_collator=data_collator,
+        #     compute_metrics=compute_metrics,
+        #     callbacks=[
+        #         mse_callback,
+        #         pred_callback,
+        #         EarlyStoppingCallback(early_stopping_patience=5)
+        #     ]
+        # )
+
+
+        train_Y = np.stack([train_raw[f"prop{i}"] for i in range(num_targets)], axis=1)
+        mu = train_Y.mean(axis=0)
+        sigma = train_Y.std(axis=0) + 1e-8
+
+        use_weights=True
+        weights = (1.0 / (sigma**2 + 1e-8)).tolist() if use_weights else None
+        trainer = WeightedHuberTrainer(
             model=model,
             args=training_args,
             tokenizer=tokenizer,
@@ -270,11 +336,9 @@ def main():
             eval_dataset=val_dataset,
             data_collator=data_collator,
             compute_metrics=compute_metrics,
-            callbacks=[
-                mse_callback,
-                pred_callback,
-                EarlyStoppingCallback(early_stopping_patience=5)
-            ]
+            callbacks=[mse_callback, pred_callback, EarlyStoppingCallback(early_stopping_patience=5)],
+            target_weights=weights,
+            huber_delta=1.0,
         )
 
         # Set trainer reference for callbacks
@@ -287,6 +351,7 @@ def main():
         # Clean up checkpoints (keep only best)
         best_model_dir = trainer.state.best_model_checkpoint
         for path in glob.glob(os.path.join(str(output_dir), "checkpoint-*")):
+            print("path",path)
             if path != best_model_dir:
                 print(f"Removing {path}...")
                 shutil.rmtree(path)
@@ -309,32 +374,38 @@ def main():
     metrics_rows = []
     for i in range(len(mse_errors)):
         metrics_rows.append({
-            "target": i,
+            "target": get_descriptors(ds)[i],
+            "target_id": i,
             "mse": float(mse_errors[i]),
             "correlation": float(correlations[i]),
             "p_value_mse": float(p_value_mse[i]),
             "p_value_correlation": float(p_value_correlation[i])
         })
-
+    beh_val = (
+        json.dumps(behavior_embeddings)   # '["intensity","pleasantness","sweet"]'
+        .replace('"', "'")                # -> "['intensity','pleasantness','sweet']"
+        if isinstance(behavior_embeddings, (list, tuple))
+        else str(behavior_embeddings or "")
+    )
     metrics_df = pd.DataFrame(metrics_rows).assign(
         model=model_name,
         ds=ds,
         participant_id=participant_id,
         n_fold=n_fold,
-        behavior_embeddings=behavior_embeddings,
+        behavior_embeddings=beh_val,
         unfreeze_last_n=unfreeze_last_n,
         num_train_epochs=num_train_epochs,
         learning_rate=lr,
         batch_size=batch_size,
         weight_decay=weight_decay,
         date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        run_id=os.environ.get("RUN_ID", "UNKNOWN")
+        run_id=os.environ.get("RUN_ID", "UNKNOWN"),
     )
     write_header = not out_file.exists()
     metrics_df.to_csv(out_file, mode="a", index=False, header=write_header)
 
     # Save MSE tracking results
-    print(mse_tracking)
+   
     mse_df = pd.DataFrame(mse_tracking).assign(
         model=model_name,
         ds=ds,
@@ -346,10 +417,11 @@ def main():
         batch_size=batch_size,
         weight_decay=weight_decay,
         date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        run_id=os.environ.get("RUN_ID", "UNKNOWN")
+        run_id=os.environ.get("RUN_ID", "UNKNOWN"),
+        behavior_embeddings = beh_val,
     )
 
-    mse_file = out_base / f"mse_tracking_model-{model_name}_ds-{ds}.csv"
+    mse_file = out_base / f"mse_tracking_model-{model_name}_ds-{ds}_runid-{run_id}.csv"
     write_header = not mse_file.exists()
     mse_df.to_csv(mse_file, mode="a", index=False, header=write_header)
 

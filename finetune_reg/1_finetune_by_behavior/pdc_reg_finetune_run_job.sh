@@ -3,12 +3,12 @@
 #SBATCH -J moljob
 #SBATCH -o logs/output_%A_%a.out
 #SBATCH -e logs/error_%A_%a.err
-#SBATCH -t 24:00:00
+#SBATCH -t 8:00:00
 #SBATCH -n 1
 #SBATCH -p shared
 #SBATCH --mem=8G
+# set -euo pipefail
 
-# --- Env ---
 module purge
 module load miniconda3/24.7.1-0-cpeGNU-23.12
 source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
@@ -21,13 +21,13 @@ echo "Using Python at: $(which python)"
 python -V
 mkdir -p logs
 
-# --- Defaults ---
-OUT_DIR="${OUT_DIR:-Aug25_finetuned_reg}"
-INPUT_TYPE="${INPUT_TYPE:-smiles}"
-EPOCHS="${EPOCHS:-2}"
 
 # --- Load experiment grid ---
 source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
+
+# --- Pick up the ONE RUN_ID passed by the submitter ---
+
+echo "RUN_ID=${RUN_ID} (shared across all tasks in this campaign)"
 
 # === Index setup with OFFSET + bundle ===
 offset=${OFFSET:-0}
@@ -45,15 +45,13 @@ num_wds=${#weight_decays[@]}
 num_bss=${#batch_sizes[@]}
 
 total_combinations=$((num_datasets * num_subjects * num_folds_vals * num_models * num_behaviors * num_unfreezes * num_lrs * num_wds * num_bss))
+
 for k in $(seq 0 $((tasks_per_job-1))); do
     index=$(( base_index + k ))
     if [ "$index" -ge "$total_combinations" ]; then
         echo "Index $index out of range (max $((total_combinations - 1))). Skipping."
         continue
     fi
-
-    RUN_ID="${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}_${k}"
-    export RUN_ID
 
     # === Decode grid indices ===
     ds_idx=$(( index / (num_subjects * num_folds_vals * num_models * num_behaviors * num_unfreezes * num_lrs * num_wds * num_bss) % num_datasets ))
@@ -100,6 +98,5 @@ for k in $(seq 0 $((tasks_per_job-1))); do
       --out_dir "$OUT_DIR" \
       --num_train_epochs "$EPOCHS" \
       --ds "$DS" \
-      --input_type "$INPUT_TYPE"
-
+      --embed_type "$embed_type"
 done

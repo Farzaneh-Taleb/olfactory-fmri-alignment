@@ -1,23 +1,27 @@
 #!/bin/bash
-# Improved submission script with retries and clearer logging
+# set -euo pipefail
 
 source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
 source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
 
-TASKS_PER_JOB=10
+TASKS_PER_JOB=1
 chunk_size=1000
 sleep_between_batches=5
 sleep_between_retries=600
 dry_run=false  # set to true for testing without sbatch
 
+# --- Create ONE run id for the whole campaign ---
+RUN_ID="rg_$(date +%Y%m%dT%H%M%S)_$RANDOM"
+export RUN_ID
+
 total_configs=$(( ${#datasets[@]} * ${#subjects[@]} * ${#n_folds[@]} * ${#models[@]} \
                 * ${#behavior_embeddings[@]} * ${#unfreeze_layers[@]} \
                 * ${#lrs[@]} * ${#weight_decays[@]} * ${#batch_sizes[@]} ))
-
 total_tasks=$(( (total_configs + TASKS_PER_JOB - 1) / TASKS_PER_JOB ))
 
 echo "[$(date)] Total configs: $total_configs"
 echo "[$(date)] Bundling $TASKS_PER_JOB per job => $total_tasks tasks"
+echo "[$(date)] RUN_ID=${RUN_ID}"
 
 declare -a batches_to_submit=()
 for start in $(seq 0 $chunk_size $((total_tasks - 1))); do
@@ -34,12 +38,12 @@ while [ ${#batches_to_submit[@]} -gt 0 ]; do
         [ $end -ge $((total_tasks - 1)) ] && end=$((total_tasks - 1))
         count=$((end - start + 1))
 
-        echo "[$(date)] Submitting batch: offset=$start count=$count"
+        echo "[$(date)] Submitting batch: offset=$start count=$count (RUN_ID=$RUN_ID)"
 
         if [ "$dry_run" = true ]; then
-            echo "DRY-RUN: sbatch --export=ALL,OFFSET=$start,TASKS_PER_JOB=$TASKS_PER_JOB --array=0-$((count-1)) pdc_reg_finetune_run_job.sh"
+            echo "DRY-RUN: sbatch --export=ALL,OFFSET=$start,TASKS_PER_JOB=$TASKS_PER_JOB,RUN_ID=$RUN_ID --array=0-$((count-1)) pdc_reg_finetune_run_job.sh"
         else
-            sbatch --export=ALL,OFFSET=$start,TASKS_PER_JOB=$TASKS_PER_JOB \
+            sbatch --export=ALL,OFFSET=$start,TASKS_PER_JOB=$TASKS_PER_JOB,RUN_ID=$RUN_ID \
                    --array=0-$((count-1)) pdc_reg_finetune_run_job.sh
             submit_status=$?
             if [ $submit_status -ne 0 ]; then
