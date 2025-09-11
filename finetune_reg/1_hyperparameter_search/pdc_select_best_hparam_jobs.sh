@@ -1,77 +1,94 @@
 #!/bin/bash -l
-#SBATCH -A naiss2024-22-886
-#SBATCH -J best_hparam_select
-#SBATCH -o logs/best_hparam_%A_%a.out
-#SBATCH -e logs/best_hparam_%A_%a.err
-#SBATCH -t 01:00:00
+#SBATCH -A naiss2025-22-958
+#SBATCH -J moljob
+#SBATCH -o logs/output_%A_%a.out
+#SBATCH -e logs/error_%A_%a.err
+#SBATCH -t 00:10:00
 #SBATCH -n 1
 #SBATCH -p shared
-#SBATCH --mem=4G
+#SBATCH --mem=8G
+# set -euo pipefail
 
 module purge
 module load miniconda3/24.7.1-0-cpeGNU-23.12
 source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
 conda activate fmri_proj
 export PYTHONNOUSERSITE=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
 
-# === Define grid ===
-models=(
-  "ibm/MoLFormer-XL-both-10pct"
-  "seyonec/ChemBERTa-zinc-base-v1"
-  "HUBioDataLab/SELFormer"
-  "jonghyunlee/ChemBERT_ChEMBL_pretrained"
-)
-subjects=(1 2 3)
-unfreeze_layers=(0 1 2 3 4 5 6)
-behavior_embeddings=(
-  "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17"
-  # add more comma-lists here if desired
-)
+echo "Using Python at: $(which python)"
+python -V
+mkdir -p logs
 
-# === Compute total jobs ===
+# ---- Load shared grid ----
+GRID_FILE="/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
+[ -f "$GRID_FILE" ] || { echo "Grid file not found: $GRID_FILE"; exit 1; }
+# shellcheck source=/dev/null
+source "$GRID_FILE"
+
+# ---- Required inputs ----
+: "${OUT_DIR:?Set OUT_DIR in the grid file or export OUT_DIR before submitting}"
+: "${RUN_ID:?RUN_ID must be exported by submit_all.sh}"
+
+# ---- Folders ----
+BASE_DIR="/cfs/klemming/projects/supr/olfactory_alignment"
+METRICS_DIR="${BASE_DIR}/${OUT_DIR}_finetune_metrics_${RUN_ID}"
+SAVE_DIR="${BASE_DIR}/best_hparam_selection_logs"
+mkdir -p "$SAVE_DIR" logs
+
+# ---- Decode array index (5D: ds, model, subject, unfreeze, embedding) ----
+num_datasets=${#datasets[@]}
 num_models=${#models[@]}
 num_subjects=${#subjects[@]}
 num_unfreeze=${#unfreeze_layers[@]}
 num_embed=${#behavior_embeddings[@]}
 
-total_jobs=$(( num_models * num_subjects * num_unfreeze * num_embed ))
+task_id=${SLURM_ARRAY_TASK_ID:-0}
 
-# === Decode SLURM_ARRAY_TASK_ID ===
-task_id=$SLURM_ARRAY_TASK_ID
+stride_model=$(( num_subjects * num_unfreeze * num_embed ))
+stride_ds=$(( num_models * stride_model ))
+stride_subject=$(( num_unfreeze * num_embed ))
+stride_unfreeze=$(( num_embed ))
 
-# four-dimensional indexing
-model_idx=$(( task_id / (num_subjects * num_unfreeze * num_embed) ))
-remain=$(( task_id % (num_subjects * num_unfreeze * num_embed) ))
+ds_idx=$(( task_id / stride_ds ))
+remain=$(( task_id % stride_ds ))
 
-subject_idx=$(( remain / (num_unfreeze * num_embed) ))
-remain=$(( remain % (num_unfreeze * num_embed) ))
+model_idx=$(( remain / stride_model ))
+remain=$(( remain % stride_model ))
 
-unfreeze_idx=$(( remain / num_embed ))
-embed_idx=$(( remain % num_embed ))
+subject_idx=$(( remain / stride_subject ))
+remain=$(( remain % stride_subject ))
 
-# === Extract values ===
+unfreeze_idx=$(( remain / stride_unfreeze ))
+embed_idx=$(( remain % stride_unfreeze ))
+
+DS="${datasets[$ds_idx]}"
 model_path=${models[$model_idx]}
 model_name=$(basename "$model_path")
-subject=${subjects[$subject_idx]}
-unfreeze=${unfreeze_layers[$unfreeze_idx]}
-embedding=${behavior_embeddings[$embed_idx]}
+participant_id=${subjects[$subject_idx]}
+unfreeze_last_n=${unfreeze_layers[$unfreeze_idx]}
+behavior_embedding=${behavior_embeddings[$embed_idx]}
+N_FOLD=${#folds[@]}
 
-echo "Selecting best hyperparameters for:"
-echo "  Model:           $model_name"
-echo "  Subject:         $subject"
-echo "  Unfreeze last N: $unfreeze"
-echo "  Embedding:       $embedding"
+echo "Selecting best hyperparameters"
+echo "  DS:               $DS"
+echo "  OUT_DIR:          $OUT_DIR"
+echo "  Model:            $model_name"
+echo "  Subject:          $participant_id"
+echo "  Unfreeze last N:  $unfreeze_last_n"
+echo "  Embedding:        $behavior_embedding"
+echo "  n_fold:           $N_FOLD"
+echo "  RUN_ID:           $RUN_ID"
 
-# === Paths ===
-base_dir="/cfs/klemming/projects/supr/olfactory_alignment"
-out_dir="May27_finetuned_reg"
-mkdir -p "${base_dir}/best_hparam_selection_logs"
-
-# === Run Python selector ===
 python select_best_hparams.py \
-  --model_name "$model_name" \
-  --subject "$subject" \
-  --behavior_embedding "$embedding" \
-  --unfreeze_last_n "$unfreeze" \
-  --save_dir "${base_dir}/best_hparam_selection_logs" \
-  --metrics_dir "${base_dir}/read_orig_avg/${out_dir}_metrics"
+  --ds "$DS" \
+  --out_dir "$OUT_DIR" \
+  --model "$model_name" \
+  --participant_id "$participant_id" \
+  --behavior_embeddings "$behavior_embedding" \
+  --unfreeze_last_n "$unfreeze_last_n" \
+  --run_id "$RUN_ID" \
+  --n_fold "$N_FOLD" \
+  --save_dir "$SAVE_DIR" \
+  --metrics_dir "$METRICS_DIR"
