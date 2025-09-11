@@ -1,128 +1,104 @@
 #!/bin/bash -l
-#SBATCH -A naiss2024-22-886
-#SBATCH -J moljob
+#
+#SBATCH -J finetunedchem_behavior
 #SBATCH -o logs/output_%A_%a.out
 #SBATCH -e logs/error_%A_%a.err
-#SBATCH -t 24:00:00
+#SBATCH -t 1:00:00
 #SBATCH -n 1
-#SBATCH -p shared
+#SBATCH --mem=8G
+#SBATCH --gpus 1
 
-# Load environment
-module purge
-module load miniconda3/24.7.1-0-cpeGNU-23.12
-source /proj/conda.init.sh
+set -euo pipefail
+
+module --force purge
+module load Miniforge3/24.7.1-2-hpc1-bdist
+source /software/sse/manual/Miniforge3/24.7.1-2/hpc1-bdist/etc/profile.d/conda.sh
 conda activate fmri_proj
 export PYTHONNOUSERSITE=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
 
-# Define parameter grids
-folds=(10)
-subjects=(1 2 3)
-nums_train_epochs=(40)
-n_components=(None 30)
-models=("MoLFormer-XL-both-10pct" "ChemBERTa-zinc-base-v1" "SELFormer" "ChemBERT_ChEMBL_pretrained")
-behavior_embeddings=("0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17")
-unfreeze_layers=(0)
+echo "Using Python at: $(which python)"
+python -V
+mkdir -p logs
+
+PYTHON_EXEC="${PYTHON_EXEC:-python}"
+
+GRID_FILE="/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid2.sh"
+[ -f "$GRID_FILE" ] || { echo "Grid file not found: $GRID_FILE"; exit 1; }
+source "$GRID_FILE"
+
+# FMRI-specific axes (not in grid.sh)
 rois=("PirF" "PirT" "AMY" "OFC")
-nc_masks=(False)
-func_masks=(True)
 trs=(0 1 2 3 4 5 -1)
-read_styles=('avg_orig')
-z_scores=(True)
-# Compute job index
-index=$SLURM_ARRAY_TASK_ID
 
-# Lengths of parameter arrays
-num_folds=${#folds[@]}
+# Use arrays from grid.sh:
+# datasets, subjects, n_folds, models, behavior_embeddings, unfreeze_layers, n_components, z_scores
+# Also OUT_DIR, RUN_ID exist in grid.sh
+
+local_index=${SLURM_ARRAY_TASK_ID}
+global_index=$((OFFSET + local_index))
+
+# Sizes
+num_ds=${#datasets[@]}
 num_subjects=${#subjects[@]}
-num_epochs=${#nums_train_epochs[@]}
-num_components=${#n_components[@]}
+num_folds=${#n_folds[@]}
 num_models=${#models[@]}
 num_behaviors=${#behavior_embeddings[@]}
 num_unfreeze=${#unfreeze_layers[@]}
+num_ncomp=${#n_components[@]}
 num_rois=${#rois[@]}
-num_nc_masks=${#nc_masks[@]}
-num_func_masks=${#func_masks[@]}
 num_trs=${#trs[@]}
-num_read_styles=${#read_styles[@]}
-num_z_scores=${#z_scores[@]}
+num_z=${#z_scores[@]}
 
-# Total number of jobs
-total_combinations=$((num_folds * num_subjects * num_epochs * num_components * num_models * num_behaviors * num_unfreeze * num_rois * num_nc_masks * num_func_masks * num_trs * num_read_styles * num_z_scores))
+total_jobs=$(( num_ds * num_subjects * num_folds * num_models * num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z ))
 
-echo "Total job combinations: $total_combinations"
-
-# Check if index is valid
-if [ "$index" -ge "$total_combinations" ]; then
-  echo "Index $index out of range (max $((total_combinations - 1))). Exiting."
+if (( global_index < 0 || global_index >= total_jobs )); then
+  echo "Index $global_index out of range (0..$((total_jobs-1)))."
   exit 1
 fi
 
-# Decode combination
-fold_idx=$(( index / (num_subjects * num_epochs * num_components * num_models * num_behaviors * num_unfreeze * num_rois * num_nc_masks * num_func_masks * num_trs * num_read_styles * num_z_scores) % num_folds ))
-subj_idx=$(( index / (num_epochs * num_components * num_models * num_behaviors * num_unfreeze * num_rois * num_nc_masks * num_func_masks * num_trs * num_read_styles * num_z_scores) % num_subjects ))
-epoch_idx=$(( index / (num_components * num_models * num_behaviors * num_unfreeze * num_rois * num_nc_masks * num_func_masks * num_trs * num_read_styles * num_z_scores) % num_epochs ))
-ncomp_idx=$(( index / (num_models * num_behaviors * num_unfreeze * num_rois * num_nc_masks * num_func_masks * num_trs * num_read_styles * num_z_scores) % num_components ))
-model_idx=$(( index / (num_behaviors * num_unfreeze * num_rois * num_nc_masks * num_func_masks * num_trs * num_read_styles * num_z_scores) % num_models ))
-behavior_idx=$(( index / (num_unfreeze * num_rois * num_nc_masks * num_func_masks * num_trs * num_read_styles * num_z_scores) % num_behaviors ))
-unfreeze_idx=$(( index / (num_rois * num_nc_masks * num_func_masks * num_trs * num_read_styles * num_z_scores) % num_unfreeze ))
-roi_idx=$(( index / (num_nc_masks * num_func_masks * num_trs * num_read_styles * num_z_scores) % num_rois ))
-nc_mask_idx=$(( index / (num_func_masks * num_trs * num_read_styles * num_z_scores) % num_nc_masks ))
-func_mask_idx=$(( index / (num_trs * num_read_styles * num_z_scores) % num_func_masks ))
-tr_idx=$(( index / (num_read_styles * num_z_scores) % num_trs ))
-read_style_idx=$(( index / num_z_scores % num_read_styles ))
-z_score_idx=$(( index % num_z_scores ))
+# Decode (order must match total_jobs multiplication order above)
+ds_idx=$(( global_index / (num_subjects * num_folds * num_models * num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_ds ))
+subj_idx=$(( global_index / (num_folds * num_models * num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_subjects ))
+fold_idx=$(( global_index / (num_models * num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_folds ))
+model_idx=$(( global_index / (num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_models ))
+behavior_idx=$(( global_index / (num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_behaviors ))
+unfreeze_idx=$(( global_index / (num_ncomp * num_rois * num_trs * num_z) % num_unfreeze ))
+ncomp_idx=$(( global_index / (num_rois * num_trs * num_z) % num_ncomp ))
+roi_idx=$(( global_index / (num_trs * num_z) % num_rois ))
+tr_idx=$(( global_index / num_z % num_trs ))
+z_idx=$(( global_index % num_z ))
 
-# Assign variables
-fold=${folds[$fold_idx]}
-subject=${subjects[$subj_idx]}
-num_train_epochs=${nums_train_epochs[$epoch_idx]}
-c=${n_components[$ncomp_idx]}
+# Values
+ds=${datasets[$ds_idx]}
+participant_id=${subjects[$subj_idx]}
+fold=${n_folds[$fold_idx]}
 model=${models[$model_idx]}
-behavior_embedding=${behavior_embeddings[$behavior_idx]}
-unfreeze_last_n=${unfreeze_layers[$unfreeze_idx]}
+beh="${behavior_embeddings[$behavior_idx]}"   # "" means: default behavior columns in Python
+unfreeze_last_n="${unfreeze_layers[$unfreeze_idx]}"  # can be "None"
+ncomp="${n_components[$ncomp_idx]}"           # "None" or int
 roi=${rois[$roi_idx]}
-nc_mask=${nc_masks[$nc_mask_idx]}
-func_mask=${func_masks[$func_mask_idx]}
 tr=${trs[$tr_idx]}
-read_style=${read_styles[$read_style_idx]}
-z_score=${z_scores[$z_score_idx]}
+z_score=${z_scores[$z_idx]}
 
-# Logging
-echo "Running configuration:"
-echo "  Fold: $fold"
-echo "  Subject: $subject"
-echo "  Num Train Epochs: $num_train_epochs"
-echo "  Components: $c"
-echo "  Model: $model"
-echo "  Behavior Embedding: $behavior_embedding"
-echo "  Unfreeze Last N Layers: $unfreeze_last_n"
-echo "  ROI: $roi"
-echo "  NC Mask: $nc_mask"
-echo "  Func Mask: $func_mask"
-echo "  TR: $tr"
-echo "  Read Style: $read_style"
-echo "  Z-score: $z_score"
-echo "Using Python at: $(which python)"
-python -V
+echo "Global index: $global_index (OFFSET=$OFFSET, local=$local_index)"
+echo "ds=$ds subj=$participant_id fold=$fold model=$model beh='$beh' unf=$unfreeze_last_n ncomp=$ncomp roi=$roi tr=$tr z=$z_score"
+echo "OUT_DIR=$OUT_DIR RUN_ID=$RUN_ID"
+echo "Python: $(which python)"; python -V
 
-echo "Running: fold=$fold, subject=$subject, epochs=$num_train_epochs, components=$c, model=$model, behavior_embedding=$behavior_embedding, unfreeze_last_n=$unfreeze_last_n, z_score=$z_score"
-echo "Using Python at: $(which python)"
-python -V
-PYTHON_EXEC=/proj/conda-dirs/envs/fmri_proj/bin/python
-echo "Running with Python: $PYTHON_EXEC"
-$PYTHON_EXEC -V
-$PYTHON_EXEC regression_fmri.py \
-  --subject "$subject" \
-  --num_train_epochs "$num_train_epochs" \
-  --n_components "$c" \
+export RUN_ID  # picked up by the Python script if not provided as CLI
+
+python regression_fmri.py \
+  --participant_id "$participant_id" \
   --model "$model" \
-  --behavior_embedding "$behavior_embedding" \
+  --ds "$ds" \
+  --n_components "$ncomp" \
+  --out_dir "$OUT_DIR" \
   --n_fold "$fold" \
-  --unfreeze_last_n "$unfreeze_last_n" \
-  --roi "$roi" \
-  --nc_mask "$nc_mask" \
-  --func_mask "$func_mask" \
-  --tr "$tr" \
-  --read_style "$read_style" \
   --z_score "$z_score" \
-  --out_dir 'May15_finetuned_reg'
+  --roi "$roi" \
+  --tr "$tr" \
+  --behavior_embeddings "$beh" \
+  --unfreeze_last_n "$unfreeze_last_n" \
+  --run_id "$RUN_ID"

@@ -1,32 +1,26 @@
 #!/bin/bash
+# set -euo pipefail
 
-# === Define experiment grid ===
-models=(
-  "ibm/MoLFormer-XL-both-10pct"
-  "seyonec/ChemBERTa-zinc-base-v1"
-  "HUBioDataLab/SELFormer"
-  "jonghyunlee/ChemBERT_ChEMBL_pretrained"
-)
-subjects=(1 2 3)
-unfreeze_last_n=(0 1 2 3 4 5 6)
-behavior_embeddings=(
-  "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17"
-  # add more lists here if needed
-)
+GRID_FILE=""/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/finetune_reg/fmri_finetune_grid.sh"
+[ -f "$GRID_FILE" ] || { echo "Grid file not found: $GRID_FILE"; exit 1; }
+# shellcheck source=/dev/null
+source "$GRID_FILE"
 
-# === Compute total number of combinations ===
-total_jobs=$(( 
-  ${#models[@]} * 
-  ${#subjects[@]} * 
-  ${#unfreeze_last_n[@]} * 
-  ${#behavior_embeddings[@]}
-))
+: "${OUT_DIR:?Set OUT_DIR in the grid file or export OUT_DIR before submitting}"
 
+num_datasets=${#datasets[@]}
+num_models=${#models[@]}
+num_subjects=${#subjects[@]}
+num_unfreeze=${#unfreeze_layers[@]}
+num_embed=${#behavior_embeddings[@]}
+
+total_jobs=$(( num_datasets * num_models * num_subjects * num_unfreeze * num_embed ))
 echo "Submitting $total_jobs jobs for best hyperparameter selection..."
-echo "  Models:              ${models[*]}"
-echo "  Subjects:            ${subjects[*]}"
-echo "  Unfreeze layers:     ${unfreeze_last_n[*]}"
-echo "  Behavior embeddings: ${behavior_embeddings[*]}"
 
-# === Fire off the SLURM array ===
-sbatch --array=0-$((total_jobs - 1)) pdc_select_best_hparam_jobs.sh
+# One RUN_ID for the entire array
+
+
+sbatch \
+  --export=ALL,OUT_DIR="$OUT_DIR",RUN_ID="$RUN_ID" \
+  --array=0-$((total_jobs - 1)) \
+  pdc_select_best_hparam_jobs.sh

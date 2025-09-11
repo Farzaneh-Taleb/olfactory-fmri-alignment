@@ -10,12 +10,12 @@
 # Load environment
 module purge
 module load miniconda3/24.7.1-0-cpeGNU-23.12
-source /proj/conda.init.sh
+source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
 conda activate fmri_proj
 export PYTHONNOUSERSITE=1
 
 # Define parameter grids
-folds=(5)
+folds=(10)
 subjects=(1 2 3)
 nums_train_epochs=(40)
 n_components=(None 30)
@@ -108,10 +108,7 @@ python -V
 echo "Running: fold=$fold, subject=$subject, epochs=$num_train_epochs, components=$c, model=$model, behavior_embedding=$behavior_embedding, unfreeze_last_n=$unfreeze_last_n, z_score=$z_score"
 echo "Using Python at: $(which python)"
 python -V
-PYTHON_EXEC=/proj/conda-dirs/envs/fmri_proj/bin/python
-echo "Running with Python: $PYTHON_EXEC"
-$PYTHON_EXEC -V
-$PYTHON_EXEC regression_fmri.py \
+python regression_fmri.py \
   --subject "$subject" \
   --num_train_epochs "$num_train_epochs" \
   --n_components "$c" \
@@ -125,4 +122,4 @@ $PYTHON_EXEC regression_fmri.py \
   --tr "$tr" \
   --read_style "$read_style" \
   --z_score "$z_score" \
-  --out_dir 'May15_finetuned_reg_transfer'
+  --out_dir 'May27_finetuned_reg_transfer'

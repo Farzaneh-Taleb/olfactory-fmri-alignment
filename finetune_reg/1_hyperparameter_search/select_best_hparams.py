@@ -1,128 +1,154 @@
-import argparse
-import glob
-import re
-from collections import defaultdict
-from pathlib import Path
-import pandas as pd
-import csv
 import sys
 import os
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = '/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment'
-sys.path.insert(0, project_root)
-
-from utils.config import BASE_DIR, SEED
-
-def extract_hparams_from_filename(filename):
+parent_dir = os.path.dirname(os.path.dirname(current_dir))
+sys.path.append(parent_dir)
+import json
+import argparse
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import csv
+import sys
+from utils.arg_parser import create_hparm_parser
+from utils.config import BASE_DIR
+from utils.helpers import get_descriptors
+parser = create_hparm_parser()
+def load_tracking_csv(metrics_dir: str, model_name: str, ds: str,run_id: str) -> Path:
     """
-    Extract hyperparameters from a filename like:
-      mean_mse_{model_name}_{n_fold}_{epochs}_{subject}_{embedding}_{unfreeze}_{lr}_{bs}_{wd}.csv
-    Returns a tuple of ALL seven hyperparameters.
+    New pipeline appends all runs of a (model, ds) into a single CSV:
+      mse_tracking_model-{model}_ds-{ds}.csv
     """
-    stem = Path(filename).stem
-    if not stem.startswith("mean_mse_"):
-        return None
-    stem = stem[len("mean_mse_"):]
+    p = Path(metrics_dir) / f"mse_tracking_model-{model_name}_ds-{ds}_runid-{run_id}.csv"
+    if not p.exists():
+        print(f"[ERROR] Tracking file not found: {p}", file=sys.stderr)
+        sys.exit(1)
+    return p
 
-    # split on '_' and peel off last 8 fields:
-    parts = stem.split("_")
-    if len(parts) < 9:
-        print(f"Skipping malformed filename: {filename}")
-        return None
-
-    # destructure:
-    *model_name_parts, n_fold, epochs, subject, embedding, unfreeze, lr, bs, wd = parts
-    model_name = "_".join(model_name_parts)
-
-    try:
-        return (
-            model_name,
-            int(n_fold),
-            int(epochs),
-            int(subject),
-            embedding,
-            int(unfreeze),
-            float(lr),
-            int(bs),
-            float(wd),
-        )
-    except ValueError as e:
-        print(f"Error parsing values in {filename}: {e}")
-        return None
-
-def select_top5_hyperparams(csv_files):
+def select_top5_from_tracking(df: pd.DataFrame,
+                              subject: int,
+                              unfreeze_last_n: int,
+                              behavior_embeddings: str | None) -> list[tuple]:
     """
-    Group files by the full 9‐tuple of hyperparameters and pick top 5 by mean best‐MSE.
+    From the consolidated tracking DataFrame, pick top-5 hyperparams by:
+      1) For each (fold, hyperparams) take the minimum mean_mse over epochs.
+      2) Average across folds -> AvgBestMSE.
+    Hyperparams considered: (learning_rate, batch_size, weight_decay, num_train_epochs).
+    We pre-filter by subject (participant_id) and unfreeze_last_n. If the column
+    'behavior_embeddings' exists we also filter by exact match to behavior_embedding.
+    Returns list of tuples: (hyper_tuple, avg_best_mse, n_folds)
+    where hyper_tuple = (lr, bs, wd, epochs)
     """
-    grouped = defaultdict(list)
-    for f in csv_files:
-        h = extract_hparams_from_filename(f)
-        if h:
-            grouped[h].append(f)
+    # Required columns check
+    needed = {"fold", "mean_mse", "participant_id", "unfreeze_last_n",
+              "learning_rate", "batch_size", "weight_decay", "num_train_epochs"}
+    if not needed.issubset(df.columns):
+        missing = sorted(list(needed - set(df.columns)))
+        print(f"[ERROR] Tracking CSV missing columns: {missing}", file=sys.stderr)
+        sys.exit(1)
+    beh_val = (
+        json.dumps(behavior_embeddings)   # '["intensity","pleasantness","sweet"]'
+        .replace('"', "'")                # -> "['intensity','pleasantness','sweet']"
+        if isinstance(behavior_embeddings, (list, tuple))
+        else str(behavior_embeddings or "")
+    )
+    q = (
+    (df["participant_id"] == int(subject)) &
+    ((df["unfreeze_last_n"] == unfreeze_last_n) | (df["unfreeze_last_n"].isna() & (unfreeze_last_n is None))) &
+    (df["behavior_embeddings"] == beh_val)
+) 
 
-    results = []
-    for hparams, files in grouped.items():
-        try:
-            df_all = pd.concat((pd.read_csv(f) for f in files), ignore_index=True)
-            # best MSE per fold, then average across folds:
-            best_per_fold = df_all.groupby("fold")["mean_mse"].min()
-            mean_best_mse = best_per_fold.mean()
-            results.append((hparams, mean_best_mse, len(files)))
-        except Exception as e:
-            print(f"Failed reading {files}: {e}")
+    print(df["unfreeze_last_n"].unique(),"uuu")
+    print(unfreeze_last_n,"unfreeze_last_nnn")
 
-    if not results:
-        print("No valid configurations found.")
-        return []
+    dff = df.loc[q].copy()
+    if dff.empty:
+        print("[ERROR] No rows after filtering by subject/unfreeze (and embedding if available).", file=sys.stderr)
+        sys.exit(2)
 
-    # sort ascending by mean_best_mse
-    results.sort(key=lambda x: x[1])
+    # Define hyperparam key
+    hyper_cols = ["learning_rate", "batch_size", "weight_decay", "num_train_epochs"]
+    dff["__hyper__"] = list(zip(*[dff[c] for c in hyper_cols]))
 
-    print("\nTop 5 hyperparameter configurations (including lr, bs, wd):")
-    for rank, (h, score, count) in enumerate(results[:5], 1):
-        (model, n_fold, epochs, subj, emb, unfreeze, lr, bs, wd) = h
-        print(f"{rank:>2}. model={model}, folds={n_fold}, epochs={epochs}, subject={subj}, "
-              f"emb=[{emb}], unfreeze={unfreeze}, lr={lr}, bs={bs}, wd={wd}  →  AvgBestMSE={score:.6f}  "
-              f"({count} files)")
+    # Step 1: per (hyper, fold) min over epochs
+    per_fold_min = (
+        dff.groupby(["__hyper__", "fold"], as_index=False)["mean_mse"]
+        .min()
+        .rename(columns={"mean_mse": "best_mse"})
+    )
+
+    # Step 2: average across folds
+    agg = (
+        per_fold_min.groupby("__hyper__", as_index=False)
+        .agg(avg_best_mse=("best_mse", "mean"),
+             n_folds=("best_mse", "size"))
+    )
+
+    # Sort ascending by avg_best_mse
+    agg = agg.sort_values("avg_best_mse", ascending=True)
+
+    # Convert to list of tuples
+    results = [ (row["__hyper__"], float(row["avg_best_mse"]), int(row["n_folds"])) 
+                for _, row in agg.iterrows() ]
+
     return results[:5]
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name",         required=True)
-    parser.add_argument("--subject",            required=True)
-    parser.add_argument("--behavior_embedding", required=True)
-    parser.add_argument("--unfreeze_last_n",    required=True)
-    parser.add_argument("--metrics_dir",        required=True)
-    parser.add_argument("--save_dir",           required=True)
+    
+    
     args = parser.parse_args()
+    unfreeze_last_n=args.unfreeze_last_n
+    if unfreeze_last_n in (None, "", "None"):
+    # nothing to unfreeze
+        print("No layers will be unfrozen.")
+    else:
+        unfreeze_last_n = int(unfreeze_last_n)
+    metrics_dir =f'{BASE_DIR}/{args.out_dir}_finetune_metrics_{args.run_id}'
+    # Load the consolidated tracking CSV
+    tracking_path = load_tracking_csv(metrics_dir, args.model, args.ds,args.run_id)
+    ds = args.ds
+    behavior_embeddings = args.behavior_embeddings or get_descriptors(ds)
+    print(f"Reading tracking CSV: {tracking_path}")
+    df = pd.read_csv(tracking_path)
+    df["unfreeze_last_n"] = df["unfreeze_last_n"].replace("", np.nan)
 
-    pattern = (
-        f"{args.metrics_dir}/mean_mse_{args.model_name}_*_*_{args.subject}_"
-        f"{args.behavior_embedding}_{args.unfreeze_last_n}_*_*_*.csv"
+    # Select top-5
+    top5 = select_top5_from_tracking(
+        df, subject=args.participant_id,
+        unfreeze_last_n=unfreeze_last_n,
+        behavior_embeddings=behavior_embeddings
     )
-    print(f"Searching for: {pattern}")
-    csv_files = glob.glob(pattern)
-    print(f"Found {len(csv_files)} files.")
-
-    top5 = select_top5_hyperparams(csv_files)
     if not top5:
-        exit(1)
+        print("[ERROR] No valid configurations found.")
+        sys.exit(3)
 
-    # write out a CSV with all 9 params + score + file-count
-    out_path = (
-        f"{args.save_dir}/top5_hparams_{args.model_name}_"
-        f"{args.subject}_{args.behavior_embedding}_{args.unfreeze_last_n}.csv"
+    # Pretty print
+    print("\nTop 5 hyperparameter configurations (lr, bs, wd, epochs):")
+    for i, (hyper, score, nfolds) in enumerate(top5, 1):
+        lr, bs, wd, epochs = hyper
+        print(f"{i:>2}. lr={lr}, bs={bs}, wd={wd}, epochs={epochs}  →  AvgBestMSE={score:.6f}  (folds={nfolds})")
+
+    # Save CSV
+    out_name = (
+        f"top5_hparams_{args.model}_{args.ds}_"
+        f"subj-{args.participant_id}_emb-{behavior_embeddings}_unf-{unfreeze_last_n}_runid-{args.run_id}.csv"
     )
+    out_path = Path(args.save_dir) /args.run_id/ out_name
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
     with open(out_path, "w", newline="") as fout:
-        writer = csv.writer(fout)
-        writer.writerow([
-            "Rank","Model","n_fold","epochs","subject",
-            "embedding","unfreeze_last_n","lr","batch_size","weight_decay",
-            "avg_best_mse","num_files"
+        w = csv.writer(fout)
+        w.writerow([
+            "Rank","model","ds","participant_id","behavior_embeddings","unfreeze_last_n",
+            "learning_rate","batch_size","weight_decay","num_train_epochs",
+            "avg_best_mse","n_fold","run_id"
         ])
-        for rank, (h, score, count) in enumerate(top5, 1):
-            writer.writerow([
-                rank, *h, f"{score:.6f}", count
+        for rank, (hyper, score, nfolds) in enumerate(top5, 1):
+            lr, bs, wd, epochs = hyper
+            w.writerow([
+                rank, args.model, args.ds, args.participant_id,behavior_embeddings,
+                unfreeze_last_n, lr, bs, wd, epochs, f"{score:.6f}", nfolds,args.run_id
             ])
+
 
     print(f"\nTop 5 saved to: {out_path}")

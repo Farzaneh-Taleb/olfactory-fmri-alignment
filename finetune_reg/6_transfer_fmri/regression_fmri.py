@@ -1,4 +1,4 @@
-base_dir = '/proj' 
+base_dir = '/cfs/klemming/projects/supr/olfactory_alignment'
 
 import sys
 parent_dir = f'{base_dir}/olfactory-fmri-alignment'
@@ -13,9 +13,8 @@ from scipy import stats
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
-from utils import molecular_prep
 from sklearn.preprocessing import StandardScaler
-
+import glob
 seed = 2024
 
 import argparse
@@ -297,7 +296,7 @@ def main():
                     metrics.to_csv(f"{base_dir}/{out_dir}_fmri_metrics/all_laterfmrimetrics_{model_name}_{n_fold}_{num_train_epochs}_{subject_source}_{subject_dest}_{behavior_embeddings}_{unfreeze_last_n}_{layer}_{n_components}_{roi}_{nc_mask}_{func_mask}_{tr_orig}_{read_style}_{z_score}.csv", index=False)
                     continue
             elif read_style == 'avg_orig':
-                fmri=read_orig_avg(base_dir, subject_dest, roi,tr)
+                fmri=read_fmri(base_dir, subject_dest, roi,tr)
             else:   
                 raise ValueError(f"Invalid read_style: {read_style}. Choose 'avg_computed' or 'avg_orig'.")
 
@@ -309,8 +308,7 @@ def main():
             embeddings_test= []
             fmris_train=[]
             fmris_test=[]
-            pre='May15_'
-
+            pre=out_dir.split("_")[0]+"_"
 
 
 
@@ -318,14 +316,37 @@ def main():
             for i_fold in range(n_fold):
 
 
-                filename = (
-                    f"{pre}finetuned_reg_fembeddings_transfer_{model_name}_{n_fold}_{num_train_epochs}_"
-                    f"{subject_source}_{subject_dest}_{behavior_embeddings}_{unfreeze_last_n}_{i_fold}_{layer}.npy"
-                )
-                print(f"reading {model_name}_{n_fold}_{num_train_epochs}_{subject_source}_{subject_dest}_{behavior_embeddings}_{unfreeze_last_n}_{i_fold}_{layer}.npy")
-                print(f"subject_source:{subject_source}, subject_dest{subject_dest}")
+                # filename = (
+                #     f"{pre}finetuned_reg_fembeddings_transfer_{model_name}_{n_fold}_{num_train_epochs}_"
+                #     f"{subject_source}_{subject_dest}_{behavior_embeddings}_{unfreeze_last_n}_{i_fold}_{layer}.npy"
+                # )
+                # print(f"reading {model_name}_{n_fold}_{num_train_epochs}_{subject_source}_{subject_dest}_{behavior_embeddings}_{unfreeze_last_n}_{i_fold}_{layer}.npy")
+                # print(f"subject_source:{subject_source}, subject_dest{subject_dest}")
 
-                embeddings = np.load(f"{base_dir}/read_orig_avg/{pre}finetuned_reg_fembeddings_transfer/{filename}")
+                # embeddings = np.load(f"{base_dir}/read_orig_avg/{pre}finetuned_reg_fembeddings_transfer/{filename}")
+                
+                
+                base_filename = (
+                f"{pre}finetuned_reg_fembeddings_transfer_{model_name}_{n_fold}_{num_train_epochs}_"
+                f"{subject_source}_{subject_dest}_{behavior_embeddings}_{unfreeze_last_n}_{i_fold}_{layer}"
+                )
+
+                folder = f"{base_dir}/read_orig_avg/{pre}finetuned_reg_fembeddings_transfer"
+                pattern1 = os.path.join(folder, f"{base_filename}_*.npy")
+                pattern2 = os.path.join(folder, f"{base_filename}.npy")
+                filtered_matches1 = glob.glob(pattern1)
+                filtered_matches2 = glob.glob(pattern2)
+                filtered_matches = filtered_matches1+filtered_matches2
+
+
+                if not filtered_matches:
+                    raise FileNotFoundError(f"No .npy file found for layer {layer} matching pattern: {pattern1} or {pattern2}")
+                elif len(filtered_matches) > 1:
+                    raise ValueError(f"Multiple exact matches found for layer {layer}:\n{filtered_matches}")
+
+                embeddings = np.load(filtered_matches[0])
+                
+                
                 if z_score:
                     print("zscored",flush=True)
                     embeddings = np.nan_to_num(embeddings, nan=0)

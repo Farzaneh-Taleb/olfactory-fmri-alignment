@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from .config import BASE_DIR
+from pathlib import Path
 def load_embeddings(model_name, layer, z_score=False):
     """
     Load and optionally standardize embeddings.
@@ -159,8 +160,159 @@ def load_model_embeddings(ds, model_name, cids, layer, embed_type):
     # --- Extract and return as numpy array ---
     arr = df[emb_cols].to_numpy(dtype=float)
     print("Embeddings shape:", arr.shape, flush=True)
+    del df
     return arr
 
+def fix_csv_with_header(in_path, out_path):
+    with open(in_path, "r", errors="replace") as f:
+        # read the header line
+        header = f.readline()
+        expected_cols = header.count(",") + 1   # number of fields in header
+        print(f"[INFO] Header has {expected_cols} columns")
+
+        with open(out_path, "w", newline="") as out:
+            out.write(header)  # keep header as-is
+
+            buf = []
+            in_quotes = False
+            col_count = 0
+            quote_char = '"'
+
+            while True:
+                ch = f.read(1)
+                if not ch:
+                    if buf:
+                        out.write("".join(buf) + "\n")
+                    break
+
+                if ch == quote_char:
+                    in_quotes = not in_quotes
+                    buf.append(ch)
+                    continue
+
+                if ch == "," and not in_quotes:
+                    col_count += 1
+                    buf.append(ch)
+                    if col_count == expected_cols - 1:
+                        # we’ve reached the right number of commas → flush row
+                        out.write("".join(buf) + "\n")
+                        buf.clear()
+                        col_count = 0
+                    continue
+
+                if ch == "\n":
+                    # natural newline → flush whatever we have
+                    if buf:
+                        out.write("".join(buf) + "\n")
+                        buf.clear()
+                        col_count = 0
+                    continue
+
+                buf.append(ch)
+
+# Example: 9 meta + 256 can_e = 265 columns total
+
+
+
+def load_finetuned_model_embeddings(*, ds: str, model_name: str, cids, layer: int,
+                          out_dir: str, run_id: str, i_fold: int,embed_type: str, participant_id: int,unfreeze_last_n,behavior_embeddings):
+    """
+    Load saved token[0] hidden-state embeddings for a specific (model, ds, layer, fold)
+    and return an array aligned to 'cids' (order-preserving).
+    """
+    
+    embeds_dir = Path(BASE_DIR) / f"{out_dir}_fembeddings_{run_id}"
+    
+    # csv_path_old = embeds_dir / f"reps_{model_name}_ds-{ds}_runid-{run_id}.csv"
+    csv_path = embeds_dir / f"reps_{model_name}_ds-{ds}_runid-{run_id}_unfreeze-{unfreeze_last_n}_behavior_embeddings-{behavior_embeddings}.csv"
+    #check if csv_path exists if not
+    # if not csv_path.exists():
+    #     print(f"Fixing CSV file: {csv_path_old} -> {csv_path}")
+    #     fix_csv_with_header(csv_path_old,csv_path)
+    print(csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Embeddings CSV not found: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+    print("behhhhh",behavior_embeddings)
+
+
+    print("\n==== Step-by-step filtering ====")
+    print("Initial shape:", df.shape)
+    
+    # Step 1: layer
+    df = df[df["layer"] == layer].copy()
+    print("\n[1] After filtering layer == ", layer)
+    print("shape:", df.shape)
+    print("index:", df.index)
+    print(df[["layer"]].drop_duplicates().head())
+    
+    # Step 2: i_fold
+    df = df[df["i_fold"] == i_fold].copy()
+    print("\n[2] After filtering i_fold == ", i_fold)
+    print("shape:", df.shape)
+    print("index:", df.index)
+    print(df[["i_fold"]].drop_duplicates().head())
+    
+    # Step 3: participant_id
+    df = df[df["participant_id"] == participant_id].copy()
+    print("\n[3] After filtering participant_id == ", participant_id)
+    print("shape:", df.shape)
+    print("index:", df.index)
+    print(df[["participant_id"]].drop_duplicates().head())
+    
+    # Step 4: behavior_embeddings
+    df = df[df["behavior_embeddings"] == behavior_embeddings].copy()
+    print("\n[4] After filtering behavior_embeddings == ", behavior_embeddings)
+    print("shape:", df.shape)
+    print("index:", df.index)
+    print(df[["behavior_embeddings"]].drop_duplicates().head())
+    
+    # Step 5: unfreeze_last_n
+    if unfreeze_last_n is None:
+        df = df[df["unfreeze_last_n"].isna()].copy()
+        print("\n[5] After filtering unfreeze_last_n IS NULL (because var is None)")
+    else:
+        df = df[df["unfreeze_last_n"] == unfreeze_last_n].copy()
+        print("\n[5] After filtering unfreeze_last_n == ", unfreeze_last_n)
+    
+    print("shape:", df.shape)
+    print("index:", df.index)
+    print(df[["unfreeze_last_n"]].drop_duplicates().head())
+    
+    # Final result
+    print("\n==== Final filtered df ====")
+    print("Final shape:", df.shape)
+    print("index:", df.index)
+
+    df = df.set_index("cid")
+    print("df",df.index)
+    print("cids",cids)
+    present = [cid for cid in cids if cid in df.index]
+        # & (df["i_fold"] == i_fold)]
+
+    # enforce CID order
+
+    
+    if not present:
+        raise ValueError("None of the requested CIDs are present in the embeddings file.")
+
+    df = df.loc[present]
+    df = df.sort_values(by="cid")
+    # pick emb_* columns
+    embed_type = str(embed_type).lower().strip()
+    if embed_type not in {"iso", "can"}:
+        raise ValueError("embed_type must be 'iso' or 'can'.")
+
+    # --- Pick the right block of columns ---
+    prefix = "iso_e" if embed_type == "iso" else "can_e"
+    emb_cols = [c for c in df.columns if c.startswith(prefix)]
+
+    arr = df[emb_cols].to_numpy(dtype=float)
+    print("arr",arr.shape)
+    del df
+
+    return arr
 
 def load_fold_cids(n_fold,i_fold, ds):
     """
@@ -220,6 +372,14 @@ def split_train_test_indices(all_cids, train_cids, test_cids):
     
     return indices_train, indices_test
 
+def slice_fmri_by_cids(fmri_data, all_cids, selected_cids):
+    """
+    Select rows of fmri_data whose CID (int) is in selected_cids (int).
+    """
+    
+    mask = np.isin(all_cids, selected_cids)
+    return fmri_data[mask, :]
+  
 
 # def prepare_fold_data(BASE_DIR, n_fold, model_name, subject, layer, behavior, out_dir, 
 #                      z_score=False, ds=""):

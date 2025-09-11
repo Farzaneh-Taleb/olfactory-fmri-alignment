@@ -1,76 +1,72 @@
 #!/bin/bash
+# set -euo pipefail
 
-# Load environment (optional, recommended for module sanity)
-source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
+# Path to your grid.sh (the one you shared)
+GRID_FILE="/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid2.sh"
+[ -f "$GRID_FILE" ] || { echo "Grid file not found: $GRID_FILE"; exit 1; }
 
-# Define parameter grids
-folds=(10)
-subjects=(1 2 3)
-nums_train_epochs=(40)
-n_components=(None 30)
-models=("MoLFormer-XL-both-10pct" "ChemBERTa-zinc-base-v1" "SELFormer" "ChemBERT_ChEMBL_pretrained")
-behavior_embeddings=("0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17")
-unfreeze_layers=(0)
+# Load to compute total count (no need to duplicate values)
+# shellcheck source=/dev/null
+source "$GRID_FILE"
+
+# FMRI axes (not in grid.sh)
 rois=("PirF" "PirT" "AMY" "OFC")
-nc_masks=(False)
-func_masks=(True)
 trs=(0 1 2 3 4 5 -1)
-read_styles=('avg_orig')
-z_scores=(True)
 
+# Sizes
+num_ds=${#datasets[@]}
+num_subjects=${#subjects[@]}
+num_folds=${#n_folds[@]}
+num_models=${#models[@]}
+num_behaviors=${#behavior_embeddings[@]}
+num_unfreeze=${#unfreeze_layers[@]}
+num_ncomp=${#n_components[@]}
+num_rois=${#rois[@]}
+num_trs=${#trs[@]}
+num_z=${#z_scores[@]}
 
+total_jobs=$(( num_ds * num_subjects * num_folds * num_models * num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z ))
+echo "Total job combinations: $total_jobs"
 
-# Calculate total combinations
-total_jobs=$(( ${#subjects[@]} * ${#folds[@]} * ${#nums_train_epochs[@]} * ${#n_components[@]} * ${#models[@]} * ${#behavior_embeddings[@]} * ${#unfreeze_layers[@]} * ${#rois[@]} * ${#nc_masks[@]} * ${#func_masks[@]} * ${#trs[@]} * ${#read_styles[@]} * ${#z_scores[@]} ))
+# Chunking to respect Slurm MaxArraySize (often 1001)
+CHUNK_SIZE=1000
+SLEEP_BETWEEN_BATCHES=5
+SLEEP_BETWEEN_RETRIES=600
 
-# Settings
-chunk_size=1000            # Jobs per array
-sleep_between_batches=5    # Seconds between individual batch submissions
-sleep_between_retries=600  # Seconds between retries
-
-# Initialize all batches
-declare -a batches_to_submit=()
-
-for start in $(seq 0 $chunk_size $((total_jobs - 1))); do
-    batches_to_submit+=($start)
+declare -a starts=()
+for start in $(seq 0 $CHUNK_SIZE $((total_jobs - 1))); do
+  starts+=("$start")
 done
 
-echo "Initial total batches: ${#batches_to_submit[@]}"
+# for start in $(seq 0 $CHUNK_SIZE 2); do
+#   starts+=("$start")
+# done
 
-# Keep retrying until no batches left
-while [ ${#batches_to_submit[@]} -gt 0 ]; do
-    echo "New submission pass: ${#batches_to_submit[@]} batches to submit"
+echo "Submitting ${#starts[@]} batch(es), chunk size=$CHUNK_SIZE"
 
-    failed_batches=()
+while ((${#starts[@]} > 0)); do
+  echo "New pass: ${#starts[@]} batch(es) to submit"
+  declare -a failed=()
 
-    for start in "${batches_to_submit[@]}"; do
-        end=$((start + chunk_size - 1))
-        if [ $end -ge $total_jobs ]; then
-            end=$((total_jobs - 1))
-        fi
-        count=$((end - start + 1))
+  for start in "${starts[@]}"; do
+    end=$(( start + CHUNK_SIZE - 1 ))
+    (( end >= total_jobs )) && end=$(( total_jobs - 1 ))
+    count=$(( end - start + 1 ))
+    echo "  -> submitting offset=$start count=$count"
 
-        echo "Submitting batch: offset=$start, count=$count..."
-        sbatch --export=OFFSET=$start,COUNT=$count --array=0-$((count-1)) pdc_regresion_fmri_run_job.sh
-        submit_status=$?
+    sbatch \
+      --export=ALL,GRID_FILE="$GRID_FILE",OFFSET="$start",COUNT="$count" \
+      --array=0-$((count-1)) \
+      pdc_regresion_fmri_run_job.sh || failed+=("$start")
 
-        if [ $submit_status -ne 0 ]; then
-            echo "Batch starting at offset=$start failed, will retry later."
-            failed_batches+=($start)
-        else
-            echo "Batch starting at offset=$start submitted successfully."
-        fi
+    sleep "$SLEEP_BETWEEN_BATCHES"
+  done
 
-        sleep "$sleep_between_batches"
-    done
-
-    # Update batches to retry
-    batches_to_submit=("${failed_batches[@]}")
-
-    if [ ${#batches_to_submit[@]} -gt 0 ]; then
-        echo "Some batches failed. Waiting $sleep_between_retries seconds before next retry..."
-        sleep "$sleep_between_retries"
-    else
-        echo "All batches submitted successfully!"
-    fi
+  starts=("${failed[@]}")
+  if ((${#starts[@]} > 0)); then
+    echo "Some batches failed. Retrying after $SLEEP_BETWEEN_RETRIES s..."
+    sleep "$SLEEP_BETWEEN_RETRIES"
+  else
+    echo "All batches submitted successfully!"
+  fi
 done

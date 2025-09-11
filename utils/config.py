@@ -5,7 +5,9 @@ Contains common constants and settings used across the project.
 
 import os
 
-BASE_DIR = '/cfs/klemming/projects/supr/olfactory_alignment'
+# BASE_DIR = '/cfs/klemming/projects/supr/olfactory_alignment'
+BASE_DIR = '/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment'
+
 PROJECT_DIR = os.path.join(BASE_DIR, 'olfactory-fmri-alignment-NEW')
 
 SEED = 2024

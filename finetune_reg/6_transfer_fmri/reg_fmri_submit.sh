@@ -4,7 +4,7 @@
 source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
 
 # Define parameter grids
-folds=(5)
+folds=(10)
 subjects=(1 2 3)
 nums_train_epochs=(40)
 n_components=(None 30)

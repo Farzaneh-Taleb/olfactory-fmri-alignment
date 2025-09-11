@@ -1,12 +1,12 @@
 #!/bin/bash -l
-#
+#SBATCH -A naiss2025-22-958
 #SBATCH -J moljob
 #SBATCH -o logs/output_%A_%a.out
 #SBATCH -e logs/error_%A_%a.err
-#SBATCH -t 4:00:00
+#SBATCH -t 00:10:00
 #SBATCH -n 1
-#SBATCH --mem=2G
-#SBATCH --gpus 1
+#SBATCH -p shared
+#SBATCH --mem=8G
 
 # Load environment
 module purge

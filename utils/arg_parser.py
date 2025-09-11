@@ -9,6 +9,16 @@ def str_list_or_empty(v: str) -> list[str]:
         return []
     return [c.strip() for c in v.split(",") if c.strip()]
 
+def none_or_int(value):
+    if value.lower() in ("none", ""):
+        return None
+    return int(value)
+
+
+def none_or_float(value):
+    if value.lower() in ("none", ""):
+        return None
+    return float(value)
 def create_base_parser(description='chem_exploration'):
     """
     Create base argument parser with common arguments.
@@ -34,6 +44,19 @@ def create_base_parser(description='chem_exploration'):
 
     
     return parser
+def create_extract_rep_parser() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Extract finetuned representations")
+    parser.add_argument("--model", required=True, type=str)
+    parser.add_argument("--participant_id", required=True, type=int)
+    parser.add_argument("--n_fold", required=True, type=int)
+    parser.add_argument("--behavior_embeddings",type=str_list_or_empty,default=[],
+    help="Comma-separated list of behavior embedding columns (or empty)."
+)
+    parser.add_argument("--unfreeze_last_n", type=none_or_int)
+    parser.add_argument("--ds", required=True, type=str)
+    parser.add_argument("--out_dir", required=True, type=str)
+    parser.add_argument("--run_id", required=True, type=str)
+    return parser
 
 
 def create_fmri_parser(description='chem_exploration'):
@@ -51,6 +74,28 @@ def create_fmri_parser(description='chem_exploration'):
     # fMRI-specific arguments
     parser.add_argument('--roi', type=str, required=True)
     parser.add_argument('--tr', type=int, default=-1)
+    parser.add_argument("--behavior_embeddings",type=str_list_or_empty,default=[],
+    help="Comma-separated list of behavior embedding columns (or empty)."
+)
+    parser.add_argument("--unfreeze_last_n", type=none_or_int)
+    return parser
+
+def create_fmri_finetune_parser(description='chem_exploration'):
+    """
+    Create argument parser for fMRI-specific scripts.
+    
+    Args:
+        description: Description for the argument parser
+        
+    Returns:
+        ArgumentParser: Configured parser with fMRI-specific arguments
+    """
+    parser = create_base_parser(description)
+    
+    # fMRI-specific arguments
+    parser.add_argument('--roi', type=str, required=True)
+    parser.add_argument('--tr', type=int, default=-1)
+
     
     return parser
 
@@ -92,7 +137,7 @@ def parse_common_args(args):
     if args.n_components == "None":
         args.n_components = None
     else:
-        args.n_components = int(args.n_components)
+        args.n_components = float(args.n_components)
     
     return args
 
@@ -123,15 +168,79 @@ def create_finetune_parser(description='finetune_by_behavior'):
 
     # fine-tuning specific args
 
-    parser.add_argument('--unfreeze_last_n', type=int, default=0,
-                        help="Unfreeze last N encoder layers (0 = freeze backbone; heads always trainable).")
+    parser.add_argument(
+    '--unfreeze_last_n',
+    type=none_or_int,
+    default=None,
+    help="Unfreeze last N encoder layers (None/empty = freeze backbone; heads always trainable)."
+)
     parser.add_argument('--learning_rate', type=float, default=3e-5)
     parser.add_argument('--weight_decay', type=float, default=0.0)
     parser.add_argument('--per_device_train_batch_size', type=int, default=16)
     parser.add_argument('--num_train_epochs', type=int, default=10)
-    parser.add_argument('--input_type', type=str, default='smiles', choices=['smiles', 'selfies'],
+    parser.add_argument('--embed_type', type=str, default='can', choices=['can', 'iso'],
                         help="Which text field to use from the dataset CSV.")
 
     # keep --model for labeling/metadata (separate from model_name_path)
+
+    return parser
+
+def create_hparm_parser(description='best params parser'):
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--ds",                  required=True)
+    parser.add_argument("--model",          required=True)
+    parser.add_argument("--participant_id",             required=True, type=int)
+    parser.add_argument("--behavior_embeddings",type=str_list_or_empty,default=[],
+    help="Comma-separated list of behavior embedding columns (or empty)."
+)
+    
+    parser.add_argument("--unfreeze_last_n",     type=none_or_int,
+    default=None,
+    help="Unfreeze last N encoder layers (None/empty = freeze backbone; heads always trainable).")
+    parser.add_argument("--run_id",            required=True)
+    parser.add_argument('--out_dir', type=str, required=True)
+    parser.add_argument('--n_fold', type=int, required=True)
+    parser.add_argument('--metrics_dir', type=str, required=True)
+    parser.add_argument('--save_dir', type=str, required=True)
+    
+    
+    return parser
+
+
+def create_regression_behavior_parser(description="regression_behavior"):
+    """
+    Parser for regression_behavior_refactored.py.
+
+    Args:
+        description: Description for the parser
+
+    Returns:
+        argparse.ArgumentParser
+    """
+    parser = argparse.ArgumentParser(description=description)
+
+    # Required args
+    parser.add_argument("--ds", required=True, type=str,
+                        help="Dataset identifier (e.g., sagar2023).")
+    parser.add_argument("--participant_id", required=True, type=int,
+                        help="Subject/participant ID.")
+    parser.add_argument("--model", required=True, type=str,
+                        help="Model name/path.")
+    parser.add_argument("--n_fold", required=True, type=int,
+                        help="Fold index for CV.")
+    parser.add_argument("--out_dir", required=True, type=str,
+                        help="Output directory path.")
+
+    # Optional args
+    parser.add_argument("--n_components", type=none_or_float, default=None,
+                        help="Number of PCA components (None = skip PCA).")
+    parser.add_argument("--behavior_embeddings", type=str_list_or_empty, default=[],
+                        help="Comma-separated list of behavior embedding columns (or empty = default).")
+    parser.add_argument("--unfreeze_last_n", type=none_or_int, default=None,
+                        help="Unfreeze last N encoder layers (None = freeze backbone).")
+    parser.add_argument("--z_score", type=lambda v: str(v).lower() == "true", default=False,
+                        help="Apply z-scoring (true/false).")
+    parser.add_argument("--run_id", type=str,
+                        help="Unique run identifier (default from RUN_ID env).")
 
     return parser

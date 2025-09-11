@@ -15,10 +15,13 @@ models=(
   "HUBioDataLab/SELFormer"
   "jonghyunlee/ChemBERT_ChEMBL_pretrained"
 )
-behavior_embeddings=("" "intensity" "pleasantness")       # empty string => use default behavior columns inside your script
-unfreeze_layers=(1 2 -1)
-lrs=(1e-5 2e-5 3e-5 4e-5 5e-5)
+behavior_embeddings=("" "pleasantness")       # empty string => use default behavior columns inside your script
+
+unfreeze_layers=(1 2  "None")
+lrs=(1e-5)
 weight_decays=(0.0)
 batch_sizes=(16)
-OUT_DIR="Aug26"
-EPOCHS=20
+OUT_DIR="Sep11"
+EPOCHS=40
+RUN_ID="01"
+embed_type="can"

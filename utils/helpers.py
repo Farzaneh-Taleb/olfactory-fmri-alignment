@@ -24,7 +24,11 @@ from .config import BASE_DIR
 # sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from .config import SEED
 mid_dir='data'
-
+from transformers import (
+    AutoTokenizer,
+    AutoModel
+)
+from pathlib import Path
 def set_seeds(seed=SEED):
     # Set environment variable for hash-based operations
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -487,7 +491,7 @@ def _load_text_for_cids(ds, cids,participant_id, input_type: str) -> pd.Series:
 
     # enforce provided CID order
     df = df.set_index("cid").loc[cids].reset_index()
-    print(input_type)
+    
     return df[input_type].reset_index(drop=True)
 
 
@@ -512,25 +516,78 @@ def build_hf_text_dataset_for_cids(
         embed_cols=behavior_embeddings,
         group_by_cid=True,
     )
-    print("y_np",y_np)
     
     print(behavior_embeddings)
     y_df = pd.DataFrame(y_np, columns=behavior_embeddings)
-    print("y_df1",y_df)
 
     # rename behavior columns to prop0..propK-1
     rename_map = {col: f"prop{i}" for i, col in enumerate(behavior_embeddings)}
     y_df = y_df.rename(columns=rename_map)
-    print("y_df2",y_df)
     # x: molecule strings (Series aligned to cids order)
     texts = _load_text_for_cids( ds, cids,participant_id, input_type=input_type)
 
     # assemble HF dataset (text + props only)
     df = pd.DataFrame({input_type: texts}).reset_index(drop=True)
-    print("df1",df)
     df = pd.concat([df, y_df.reset_index(drop=True)], axis=1)
-    print("df2",df)
-
     ds_hf = HFDataset.from_pandas(df)
-    print("ffffff", ds_hf.to_pandas().isna().sum())
     return ds_hf, len(behavior_embeddings)
+
+
+
+@torch.no_grad()
+def extract_representations(
+    *, cids, participant_id, input_type, out_csv: Path,
+    tokenizer: AutoTokenizer, model: AutoModel, model_name: str,
+    n_fold: int, i_fold: int, subject: int,
+    behavior_embeddings: str, unfreeze_last_n: int, ds: str,
+     token_index: int = 0,embed_type: str='can'
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.eval().to(device)
+
+    texts_df = _load_text_for_cids(ds, cids, participant_id, input_type=input_type)
+    
+    texts  = texts_df.astype(str).tolist() 
+    assert len(texts) == len(cids), f"Length mismatch: texts={len(texts)} vs cids={len(cids)}"
+
+    inputs = tokenizer(texts, padding=True, truncation=False, return_tensors="pt").to(device)
+    hidden_states = model(**inputs, output_hidden_states=True).hidden_states
+
+    rows = []
+    for layer_idx, hs in enumerate(hidden_states):
+        arr = hs[:, token_index, :].detach().cpu().numpy()  # [N, D]
+        for mol_idx, vec in enumerate(arr):
+            row = {
+                "layer": layer_idx,
+                "cid": str(cids[mol_idx]),
+                "model": model_name,
+                "participant_id": subject,
+                "n_fold": n_fold,
+                "i_fold": i_fold,
+                "behavior_embeddings": behavior_embeddings,
+                "unfreeze_last_n": unfreeze_last_n,
+                "ds": ds
+            }
+            for d, val in enumerate(vec):
+                row[f"{embed_type}_e{d}"] = float(val)
+            rows.append(row)
+    append_csv(pd.DataFrame(rows), out_csv)
+
+def get_latest_checkpoint(path: Path) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"Model directory does not exist: {path}")
+    candidates = [p for p in path.iterdir() if p.is_dir() and p.name.startswith("checkpoint-")]
+    if not candidates:
+        raise FileNotFoundError(f"No 'checkpoint-*' subdirs under: {path}")
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+def build_models_dir(out_dir: str, run_id: str) -> Path:
+    return Path(BASE_DIR) / f"{out_dir}_finetune_models_{run_id}"
+
+def build_embeds_dir(out_dir: str, run_id: str) -> Path:
+    # keep run_id to avoid collisions across runs
+    return Path(BASE_DIR) / f"{out_dir}_fembeddings_{run_id}"
+def append_csv(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    exists = path.exists()
+    df.to_csv(path, mode=("a" if exists else "w"), header=not exists, index=False)

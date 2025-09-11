@@ -41,7 +41,9 @@ def tokenize(batch, tokenizer, input_type="smiles"):
     # Don't pad here; let the collator pad
     enc = tokenizer(batch[input_type], truncation=True)
     # collect prop* columns in batch order and build (B,K) float32 list-of-lists
-    label_cols = [c for c in batch.keys() if c.startswith("prop")]
+    # label_cols = [c for c in batch.keys() if c.startswith("prop")]
+    label_cols = sorted([c for c in batch.keys() if c.startswith("prop")],
+                    key=lambda x: int(x.replace("prop","")))
     labels = np.stack([batch[c] for c in label_cols], axis=1).astype("float32").tolist()
     enc["labels"] = labels
     return enc
@@ -103,12 +105,38 @@ class MSETrackingCallback(TrainerCallback):
         return control
 
 
+# class FinalPredictionCallback(TrainerCallback):
+#     """Callback to collect final predictions from best model."""
+#     def __init__(self, test_dataset, global_preds, global_labels):
+#         self.test_dataset = test_dataset
+#         self.global_preds = global_preds
+#         self.global_labels = global_labels
+
+#     def on_train_end(self, args, state, control, **kwargs):
+#         trainer = self.trainer
+#         if state.best_model_checkpoint is not None:
+#             trainer.model = AutoModelForSequenceClassification.from_pretrained(
+#                 state.best_model_checkpoint,
+#                 num_labels=trainer.model.config.num_labels,
+#                 trust_remote_code=True
+#             )
+#             print(f"Loading best model from {state.best_model_checkpoint}")
+#             trainer.model.to(trainer.args.device)
+#         # With load_best_model_at_end=True, best weights are already loaded
+#         test_results = self.trainer.predict(self.test_dataset)
+#         preds = test_results.predictions
+#         labels = test_results.label_ids
+#         self.global_preds.append(preds)
+#         self.global_labels.append(labels)
+#         return control
+
 class FinalPredictionCallback(TrainerCallback):
-    """Callback to collect final predictions from best model."""
-    def __init__(self, test_dataset, global_preds, global_labels):
+    def __init__(self, test_dataset, global_preds, global_labels, mu, sigma):
         self.test_dataset = test_dataset
         self.global_preds = global_preds
         self.global_labels = global_labels
+        self.mu = mu
+        self.sigma = sigma
 
     def on_train_end(self, args, state, control, **kwargs):
         trainer = self.trainer
@@ -117,18 +145,19 @@ class FinalPredictionCallback(TrainerCallback):
                 state.best_model_checkpoint,
                 num_labels=trainer.model.config.num_labels,
                 trust_remote_code=True
-            )
-            print(f"Loading best model from {state.best_model_checkpoint}")
-            trainer.model.to(trainer.args.device)
-        # With load_best_model_at_end=True, best weights are already loaded
-        test_results = self.trainer.predict(self.test_dataset)
-        preds = test_results.predictions
-        labels = test_results.label_ids
+            ).to(trainer.args.device)
+        res = trainer.predict(self.test_dataset)
+        preds = res.predictions
+        labels = res.label_ids
+        # (B,1,D) -> (B,D)
+        if preds.ndim == 3 and preds.shape[1] == 1:
+            preds = preds[:, 0, :]
+        # unscale for THIS fold
+        preds = preds * self.sigma + self.mu
+        labels = labels * self.sigma + self.mu
         self.global_preds.append(preds)
         self.global_labels.append(labels)
         return control
-
-
 # def create_model_and_freeze_layers(model_name_path, num_targets, unfreeze_last_n):
 #     """Create model and apply layer freezing strategy."""
 #     model = AutoModelForSequenceClassification.from_pretrained(
@@ -240,7 +269,12 @@ def create_model_and_freeze_layers(model_name_path, num_targets, unfreeze_last_n
 #         loss = huber.mean()
 #         return (loss, outputs) if return_outputs else loss
     
-
+def add_std_labels(ds, mu, sigma, num_targets):
+    lbls = np.stack([ds[f"prop{i}"] for i in range(num_targets)], axis=1)
+    z = (lbls - mu) / sigma
+    for i in range(num_targets):
+        ds = ds.remove_columns([f"prop{i}"]).add_column(f"prop{i}", z[:, i].tolist())
+    return ds
 
 class WeightedHuberTrainer(Trainer):
     def __init__(self, *args, target_weights=None, huber_delta=1.0, **kwargs):
@@ -279,6 +313,36 @@ class WeightedHuberTrainer(Trainer):
         loss = huber.mean()
         return (loss, outputs) if return_outputs else loss
 
+
+
+class CorrHuberTrainer(Trainer):
+    def __init__(self, *args, alpha=0.5, huber_delta=1.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.alpha = alpha  # weight on correlation term
+        self.huber_delta = huber_delta
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")
+        out = model(**inputs)
+        preds = out.logits
+        if preds.ndim == 3 and preds.size(1) == 1:
+            preds = preds[:,0,:]
+        labels = labels.to(preds.dtype)
+
+        # Huber
+        d = self.huber_delta
+        diff = preds - labels
+        huber = torch.where(diff.abs() <= d, 0.5*diff**2, d*(diff.abs() - 0.5*d)).mean()
+
+        # Correlation (maximize r → minimize 1−r)
+        x = preds - preds.mean(dim=0, keepdim=True)
+        y = labels - labels.mean(dim=0, keepdim=True)
+        denom = (x.norm(dim=0) * y.norm(dim=0) + 1e-8)
+        r = (x*y).sum(dim=0) / denom
+        loss = (1 - r).mean()
+
+        total = (1 - self.alpha) * huber + self.alpha * loss
+        return (total, out) if return_outputs else total
 
 
 def main():
@@ -322,6 +386,9 @@ def main():
     input_type = input_type.get(model_name)
     run_id = os.environ.get("RUN_ID")
     embed_type = args.embed_type
+    ALPHA = 0.3
+    lr_scheduler_type = "cosine"  # sensible default
+
     # layer arg can exist but is unused for text fine-tuning
 
     # Create output directories
@@ -349,7 +416,7 @@ def main():
     mse_tracking = []
 
     # Loop through folds
-    for i_fold in range(4,n_fold):
+    for i_fold in range(1,n_fold):
         print(f"Training fold {i_fold}, Model {model_name}")
 
         # Get fold CIDs
@@ -362,6 +429,17 @@ def main():
         train_raw, num_targets = build_hf_text_dataset_for_cids(ds, participant_id, behavior_embeddings, train_cids_train, input_type)
         val_raw,   _           = build_hf_text_dataset_for_cids(ds, participant_id, behavior_embeddings, train_cids_val,   input_type)
         test_raw,  _           = build_hf_text_dataset_for_cids(ds, participant_id, behavior_embeddings, test_cids,        input_type)
+
+
+
+        train_Y = np.stack([train_raw[f"prop{i}"] for i in range(num_targets)], axis=1)
+        mu = train_Y.mean(axis=0)
+        sigma = train_Y.std(axis=0) + 1e-8
+
+        train_raw = add_std_labels(train_raw, mu, sigma, num_targets)
+        val_raw   = add_std_labels(val_raw,   mu, sigma, num_targets)
+        test_raw  = add_std_labels(test_raw,  mu, sigma, num_targets)
+
 
         # Tokenize and pack labels
         train_dataset = train_raw.map(tokenize, batched=True, fn_kwargs={"tokenizer": tokenizer, "input_type": input_type})
@@ -403,12 +481,12 @@ def main():
                 greater_is_better=True,
                 load_best_model_at_end=True,
                  warmup_ratio=0.1,
-                  lr_scheduler_type="cosine",
+                lr_scheduler_type="cosine",
                    max_grad_norm=1.0,
                 # save_fold_indices=False,
             )
 
-            search_trainer = WeightedHuberTrainer(
+            search_trainer = CorrHuberTrainer(
                 model_init=model_init,
                 args=search_args,
                 tokenizer=tokenizer,
@@ -417,25 +495,25 @@ def main():
                 data_collator=data_collator,
                 compute_metrics=compute_metrics,
                 callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
-                target_weights=None,  # keep fixed during search
+                alpha=ALPHA,  # keep fixed during search
                 huber_delta=1.0,
             )
 
             def hp_space_optuna(trial):
+               
                 return {
                     "learning_rate": trial.suggest_float("learning_rate", 1e-6, 5e-4, log=True),
-                "weight_decay": trial.suggest_float("weight_decay", 0.0, 0.1),
-                "per_device_train_batch_size": trial.suggest_categorical("per_device_train_batch_size", [4, 8, 16, 32]),
-                 "warmup_ratio": trial.suggest_float("warmup_ratio", 0.0, 0.2),
-        "lr_scheduler_type": trial.suggest_categorical("lr_scheduler_type", ["linear", "cosine"]),
-        "huber_delta": trial.suggest_float("huber_delta", 0.5, 2.0),
-        "gradient_accumulation_steps": trial.suggest_categorical("gradient_accumulation_steps", [1, 2, 4]),
-
+                    "weight_decay": trial.suggest_float("weight_decay", 0.0, 0.1),
+                    "per_device_train_batch_size": trial.suggest_categorical("per_device_train_batch_size", [4, 8, 16, 32]),
+                    "warmup_ratio": trial.suggest_float("warmup_ratio", 0.0, 0.2),
+                    "lr_scheduler_type": trial.suggest_categorical("lr_scheduler_type", ["linear", "cosine"]),
+                    "gradient_accumulation_steps": trial.suggest_categorical("gradient_accumulation_steps", [1, 2, 4]),
                 }
+
 
             # Minimize eval_mse_mean (Trainer prefixes eval_*)
             def compute_objective(metrics):
-                return metrics["eval_mse_mean"]
+                return metrics["eval_corr_mean"]
 
             print(f"[HPO] Running {HPO_TRIALS} Optuna trials…")
             best_run = search_trainer.hyperparameter_search(
@@ -453,6 +531,7 @@ def main():
             lr = float(best_params.get("learning_rate", lr))
             weight_decay = float(best_params.get("weight_decay", weight_decay))
             batch_size = int(best_params.get("per_device_train_batch_size", batch_size))
+            lr_scheduler_type = str(best_params.get("lr_scheduler_type", "cosine"))
         # ----- END HPO -----
 
         # Create and configure model
@@ -470,27 +549,32 @@ def main():
             save_strategy="epoch",
             learning_rate=lr,
             weight_decay=weight_decay,
-            lr_scheduler_type="linear",
             load_best_model_at_end=True,
-            metric_for_best_model="eval_mse_mean",
-            greater_is_better=False,
+            metric_for_best_model="eval_corr_mean",
+            greater_is_better=True,
             save_total_limit=5,
             save_safetensors=False,
             remove_unused_columns=True,  # safe with tokenize -> keep only desired cols
+            lr_scheduler_type=lr_scheduler_type,
+            warmup_ratio=0.1,
+            max_grad_norm=1.0,
         )
 
         # Set up callbacks
         mse_callback = MSETrackingCallback(val_dataset, mse_tracking, i_fold)
-        pred_callback = FinalPredictionCallback(test_dataset, global_preds, global_labels)
+        pred_callback = FinalPredictionCallback(test_dataset, global_preds, global_labels, mu, sigma)
 
-        train_Y = np.stack([train_raw[f"prop{i}"] for i in range(num_targets)], axis=1)
-        mu = train_Y.mean(axis=0)
-        sigma = train_Y.std(axis=0) + 1e-8
+        # train_Y = np.stack([train_raw[f"prop{i}"] for i in range(num_targets)], axis=1)
+        # mu = train_Y.mean(axis=0)
+        # sigma = train_Y.std(axis=0) + 1e-8
 
-        use_weights = True
-        weights = (1.0 / (sigma**2 + 1e-8)).tolist() if use_weights else None
 
-        trainer = WeightedHuberTrainer(
+
+
+        use_weights = False
+        # weights = (1.0 / (sigma**2 + 1e-8)).tolist() if use_weights else None
+
+        trainer = CorrHuberTrainer(
             model=model,
             args=training_args,
             tokenizer=tokenizer,
@@ -499,7 +583,8 @@ def main():
             data_collator=data_collator,
             compute_metrics=compute_metrics,
             callbacks=[mse_callback, pred_callback, EarlyStoppingCallback(early_stopping_patience=5)],
-            target_weights=weights,
+            # target_weights=weights,
+            alpha=ALPHA,
             huber_delta=1.0,
         )
 
@@ -544,6 +629,8 @@ def main():
     # Compute and save final metrics
     all_preds = np.concatenate(global_preds, axis=0)
     all_labels = np.concatenate(global_labels, axis=0)
+
+
     print(f"Final predictions shape: {all_preds.shape}, labels shape: {all_labels.shape}")
     correlations, mse_errors = compute_targetwise_metrics(all_preds, all_labels)
     p_value_correlation, p_value_mse = permutation_test_metrics(

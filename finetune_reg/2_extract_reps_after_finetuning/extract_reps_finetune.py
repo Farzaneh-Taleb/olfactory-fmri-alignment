@@ -1,102 +1,125 @@
-base_dir = '/proj' 
-import sys
-parent_dir=f"{base_dir}/olfactory-fmri-alignment"
-sys.path.append(parent_dir)
-from transformers import AutoModel, AutoTokenizer
-from utils.helpers import *
+from __future__ import annotations
 import argparse
+from pathlib import Path
+import os, sys, glob
+import pandas as pd
+import torch
+from transformers import AutoModel, AutoTokenizer
+import json
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(os.path.dirname(current_dir))
+sys.path.append(parent_dir)
+project_root = '/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW'
+sys.path.insert(0, project_root)
+from utils.config import BASE_DIR, SEED
+from utils.model_config import INPUT_TYPES_CAN
+from utils.helpers import set_seeds, _load_text_for_cids,get_descriptors,extract_representations,get_latest_checkpoint,build_models_dir,build_embeds_dir
+from utils.data_loader import load_fold_cids
+from utils.arg_parser import create_extract_rep_parser
 
 
 
-def extract_representations(output_dir, tokenizer, model, model_name,n_fold, i_fold,
-                             num_train_epochs, subject, behavior_embedding, unfreeze_last_n,
-                              input_type='smiles', token=0):
-    model.eval()
-    input_molecules = pd.read_csv(f'{base_dir}/embeddings/CIDs_smiles_selfies_{subject}.csv')[input_type].tolist()
-    inputs = tokenizer(input_molecules, padding=True, return_tensors="pt")
-    with torch.no_grad():
-        outputs = model(**inputs, output_hidden_states=True)
-        for i, output in enumerate(outputs.hidden_states):
-            filename = (
-                f"{output_dir}_{model_name}_{n_fold}_{num_train_epochs}_"
-                f"{subject}_{behavior_embedding}_{unfreeze_last_n}_{i_fold}_{i}.npy"
-            )
-
-            np.save(f"{base_dir}/read_orig_avg/{output_dir}/{filename}", output[:, token, :].cpu().numpy())
-def get_latest_checkpoint(path):
-    checkpoints = [
-        os.path.join(path, d)
-        for d in os.listdir(path)
-        if d.startswith("checkpoint-")
-    ]
-    if not checkpoints:
-        raise FileNotFoundError(f"No checkpoint found in {path}")
-    latest_checkpoint = sorted(checkpoints, key=os.path.getmtime)[-1]
-    return latest_checkpoint
-
-
-parser = argparse.ArgumentParser(description='chem_exploration')
-parser.add_argument('--subject', type=int)
-parser.add_argument('--n_fold', type=int)
-parser.add_argument('--model_name', type=str)
-parser.add_argument('--behavior_embedding', type=str)
-parser.add_argument('--unfreeze_last_n', type=int)
-parser.add_argument('--input_dir', type=str)
 
 def main():
-    seed = 2024
-    set_seeds(seed=seed)
-    args = parser.parse_args()
-    model_name =args.model_name 
-    if model_name == 'SELFormer':
-        input_type = 'selfies'
-    else:
-        input_type = 'smiles'
-    input_dir = args.input_dir
-    output_dir=input_dir+'_fembeddings'
-    input_dir=input_dir+'_models'
-    subject = args.subject
-    n_fold = args.n_fold
-    behavior_embedding = args.behavior_embedding
+    set_seeds(seed=SEED)
+    parser = create_extract_rep_parser()
+    args= parser.parse_args()
+
+    model_name: str = args.model
+    participant_id: int = args.participant_id
+    n_fold: int = args.n_fold
+    ds: str = args.ds
+
+    behavior_embeddings = args.behavior_embeddings or get_descriptors(ds)
+    beh_val = (
+        json.dumps(behavior_embeddings)   # '["intensity","pleasantness","sweet"]'
+        .replace('"', "'")                # -> "['intensity','pleasantness','sweet']"
+        if isinstance(behavior_embeddings, (list, tuple))
+        else str(behavior_embeddings or "")
+    )
     unfreeze_last_n = args.unfreeze_last_n
-    nums_train_epochs = 40
-    # model_name= 'ChemBERT_ChEMBL_pretrained'
+    print(unfreeze_last_n,"unfreeze_last_n")
+    out_dir_name: str = args.out_dir
+    run_id: str = args.run_id
+    embed_type = 'can'
 
-    if not os.path.exists(f"{base_dir}/read_orig_avg/{output_dir}"):
-        os.makedirs(f"{base_dir}/read_orig_avg/{output_dir}", exist_ok=True)
-    
-      
-    for i_fold in range(n_fold):     
-        
-        print(f"Extracting representations for {model_name} {i_fold} {nums_train_epochs} {subject} {behavior_embedding} {unfreeze_last_n} {input_type} {output_dir} {input_dir}", flush=True)
-        
-        # metrics_csv = os.path.join(
-        #     base_dir,
-        #     "finetuned_reg_metrics",
-        #     f"mean_mse_{model_name}_{n_fold}_{nums_train_epochs}_{subject}_{behavior_embedding}_{unfreeze_last_n}.csv"
+    input_type: str = INPUT_TYPES_CAN.get(model_name)
+
+    models_dir = build_models_dir(out_dir_name, run_id)
+    embeds_dir = build_embeds_dir(out_dir_name, run_id)
+    num_train_epochs = 40
+    print(embeds_dir)
+    (embeds_dir / "logs").mkdir(parents=True, exist_ok=True)
+
+    # Expect EXACT run_id in filename
+    # sel_csv = (
+    #     Path(BASE_DIR)
+    #     / "best_hparam_selection_logs"
+    #     / run_id
+    #     / f"top5_hparams_{model_name}_{ds}_subj-{participant_id}_emb-{behavior_embeddings}_unf-{unfreeze_last_n}_runid-{run_id}.csv"
+    # )
+
+    # if not sel_csv.exists():
+    #     # Optional: fallback to latest same spec (without run_id) if needed
+    #     pattern = (
+    #         Path(BASE_DIR) / "best_hparam_selection_logs" /
+    #         f"top5_hparams_{model_name}_{ds}_subj-{participant_id}_emb-{behavior_embeddings}_unf-{unfreeze_last_n}_runid-*.csv"
+    #     )
+    #     matches = sorted(glob.glob(str(pattern)), key=os.path.getmtime)
+    #     if not matches:
+    #         raise FileNotFoundError(f"Top-5 hparam CSV not found: {sel_csv} nor any matching {pattern}")
+    #     sel_csv = Path(matches[-1])
+    #     print(f"[WARN] Exact run_id CSV not found; falling back to latest: {sel_csv}", flush=True)
+
+    # top5 = pd.read_csv(sel_csv)
+    # if top5.empty:
+    #     raise RuntimeError(f"No rows in: {sel_csv}")
+
+    # best = top5.sort_values("Rank").iloc[0]
+    # lr = float(best["learning_rate"])
+    # batch_size = int(best["batch_size"])
+    # weight_decay = float(best["weight_decay"])
+    # num_train_epochs = int(best["num_train_epochs"])
+
+    # One accumulating CSV per (model_name, ds, run_id)
+    per_model_ds_csv = embeds_dir / f"reps_{model_name}_ds-{ds}_runid-{run_id}_unfreeze-{unfreeze_last_n}_behavior_embeddings-{beh_val}.csv"
+
+    for i_fold in range(n_fold):
+        # print(
+        #     f"[Extract] model={model_name} fold={i_fold}/{n_fold} "
+        #     f"epochs={num_train_epochs} subj={participant_id} emb={behavior_embeddings} "
+        #     f"unfreeze={unfreeze_last_n} ds={ds} lr={lr} bs={batch_size} wd={weight_decay}",
+        #     flush=True,
         # )
-        
-        
-        # if not os.path.exists(metrics_csv):
-        #     print(f"Metrics file not found: {metrics_csv}, skipping...")
-        #     continue
-        
-        # mse_df = pd.read_csv(metrics_csv)
-        # best_epoch_row = mse_df[mse_df["fold"] == i_fold].sort_values("mean_mse").iloc[0]
-        # best_epoch = int(best_epoch_row["epoch"])
-        path = os.path.join(
-            base_dir,
-            input_dir,
-            f"model_{model_name}_{n_fold}_{nums_train_epochs}_{subject}_{behavior_embedding}_{unfreeze_last_n}_{i_fold}"
-        )
-        
-        checkpoint_path = get_latest_checkpoint(path)
-        model = AutoModel.from_pretrained(checkpoint_path, trust_remote_code=True)
-        tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)
-        extract_representations(
-            output_dir, tokenizer, model, model_name,n_fold, i_fold, nums_train_epochs, subject, behavior_embedding,unfreeze_last_n,
-            input_type=input_type
-        )
 
+        train_cids, test_cids = load_fold_cids(n_fold, i_fold, ds)
+        cids = list(train_cids) + list(test_cids)
+        model_dir = models_dir / (
+            f"model_{model_name}_{n_fold}_{num_train_epochs}_{participant_id}_"
+            f"{beh_val}_{unfreeze_last_n}_{i_fold}_{ds}"
+        )
+        ckpt = get_latest_checkpoint(model_dir)
+        model = AutoModel.from_pretrained(ckpt, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(ckpt, trust_remote_code=True)
+
+        extract_representations(
+            cids=cids,
+            participant_id=participant_id,
+            input_type=input_type,
+            out_csv=per_model_ds_csv,
+            tokenizer=tokenizer,
+            model=model,
+            model_name=model_name,
+            n_fold=n_fold,
+            i_fold=i_fold,
+            subject=participant_id,
+            behavior_embeddings=behavior_embeddings,
+            unfreeze_last_n=unfreeze_last_n,
+            ds=ds,
+            token_index=0,
+            embed_type=embed_type
+        )
+        print("extracted fold",i_fold)
+    print(f"All done! Extracted representations saved to: {per_model_ds_csv}", flush=True)
 if __name__ == "__main__":
     main()
