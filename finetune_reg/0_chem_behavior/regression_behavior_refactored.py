@@ -31,6 +31,7 @@ def main():
     ds= args.ds
     embed_type='can'
     embed_cols = args.behavior_embeddings or get_descriptors(ds)
+    run_id=args.run_id
 
 
 
@@ -38,6 +39,10 @@ def main():
 
     for layer in range(1, LAYERS_END[m] + 1):
         # Load behavior embeddings
+        train_embeddings= []
+        train_behaviors=[]
+        test_embeddings=[]
+        test_behaviors=[]
         for i_fold in range(n_fold):
             print(i_fold,layer)
             
@@ -47,44 +52,44 @@ def main():
             
             train_behavior = load_behavior_embeddings(ds,train_cids,participant_id, embed_cols, group_by_cid=True)
             test_behavior = load_behavior_embeddings(ds,test_cids,participant_id, embed_cols, group_by_cid=True)
-            train_embeddings = load_model_embeddings( ds,model_name,train_cids,layer,embed_type='can')
-            test_embeddings=load_model_embeddings( ds,model_name,test_cids,layer,embed_type='can')
+            train_embedding = load_model_embeddings( ds,model_name,train_cids,layer,embed_type=embed_type)
+            test_embedding=load_model_embeddings( ds,model_name,test_cids,layer,embed_type=embed_type)
+
+            train_embeddings.append(train_embedding)
+            test_embeddings.append(test_embedding)
+            train_behaviors.append(train_behavior)
+            test_behaviors.append(test_behavior)
 
             # Prepare data for all folds
        
 
-            out_base = Path(BASE_DIR) / f"{out_dir}_metrics"
-            out_base.mkdir(parents=True, exist_ok=True)
-            out_file = out_base / f"metrics_model-{model_name}_ds-{ds}.csv"
+        out_base = Path(BASE_DIR) / f"{out_dir}_metrics_{run_id}"
+        out_base.mkdir(parents=True, exist_ok=True)
+        out_file = out_base / f"metrics_model-{model_name}_ds-{ds}_runid-{run_id}.csv"
 
 
-
-
-            # Compute correlations
-            metrics = compute_correlation(
-                train_embeddings, train_behavior, test_embeddings, test_behavior, 
-             n_components=n_components
-            )
-
-
-            metrics = metrics.assign(
-                model=model_name,
-                ds=ds,
-                participant_id=participant_id,
-                layer=layer,
-                n_fold=n_fold,
-                i_fold=i_fold,
-                n_components=n_components,
-                z_score=bool(z_score),
-                behavior_embeddings=embed_cols,
-                date = datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                run_id=os.environ.get("RUN_ID", "UNKNOWN")
-                
-            )
-
-            write_header = not out_file.exists()
-            metrics.to_csv(out_file, mode="a", index=False, header=write_header)
-            print("****")
+        
+        # Compute correlations
+        metrics = compute_correlation(
+            train_embeddings, train_behaviors, test_embeddings, test_behaviors, 
+         n_components=n_components,z_score=z_score
+        )
+        metrics = metrics.assign(
+            model=model_name,
+            ds=ds,
+            participant_id=participant_id,
+            layer=layer,
+            n_fold=n_fold,
+            n_components=n_components,
+            
+            target=embed_cols,
+            date = datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            run_id=os.environ.get("RUN_ID", "UNKNOWN")
+            
+        )
+        write_header = not out_file.exists()
+        metrics.to_csv(out_file, mode="a", index=False, header=write_header)
+        print("****")
 
 
 if __name__ == "__main__":

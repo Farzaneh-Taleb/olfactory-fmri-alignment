@@ -1,24 +1,29 @@
 #!/bin/bash -l
-#SBATCH -A naiss2025-22-958
+#
 #SBATCH -J moljob
 #SBATCH -o logs/output_%A_%a.out
 #SBATCH -e logs/error_%A_%a.err
-#SBATCH -t 24:00:00
+#SBATCH -t 10:00:00
 #SBATCH -n 1
-#SBATCH -p shared
+#SBATCH --mem=8G
+#SBATCH --gpus 1
 
-# set -euo pipefail
-mkdir -p logs
-
-# --- Environment ---
-module purge
-module load miniconda3/24.7.1-0-cpeGNU-23.12
-source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
+module --force purge
+module load Miniforge3/24.7.1-2-hpc1-bdist
+source /software/sse/manual/Miniforge3/24.7.1-2/hpc1-bdist/etc/profile.d/conda.sh
 conda activate fmri_proj
 export PYTHONNOUSERSITE=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
 
-# --- Load the shared grid ---
-source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/grid.sh"
+echo "Using Python at: $(which python)"
+python -V
+mkdir -p logs
+
+
+# --- Load experiment grid ---
+source "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/grid.sh"
+
 
 # --- Index math ---
 index=${SLURM_ARRAY_TASK_ID}
@@ -58,7 +63,7 @@ RUN_ID="${RUN_ID:-DEFAULT_RUN}"
 echo "RUN_ID=$RUN_ID"
 echo "ds=$ds participant_id=$participant_id n_fold=$n_fold n_components=$c model=$model behavior_embeddings='$behavior_embedding' z_score=$z_score"
 
-"$PYTHON_EXEC" regression_behavior_refactored.py \
+python regression_behavior_refactored.py \
   --participant_id "$participant_id" \
   --n_components "$c" \
   --model "$model" \

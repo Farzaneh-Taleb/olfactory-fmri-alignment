@@ -1,11 +1,8 @@
 #!/bin/bash
 # set -euo pipefail
 
-# optional environment reset for modules
-source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
-
-# load grid
-source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/grid.sh"
+# source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
+source "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/grid.sh"
 
 compute_total() {
   echo $(( ${#datasets[@]} * ${#subjects[@]} * ${#folds[@]} \
