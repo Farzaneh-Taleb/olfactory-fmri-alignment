@@ -1,17 +1,16 @@
 #!/bin/bash -l
-#SBATCH -A naiss2025-22-958
+#
 #SBATCH -J moljob
 #SBATCH -o logs/output_%A_%a.out
 #SBATCH -e logs/error_%A_%a.err
-#SBATCH -t 8:00:00
+#SBATCH -t 10:00:00
 #SBATCH -n 1
-#SBATCH -p shared
 #SBATCH --mem=8G
-# set -euo pipefail
+#SBATCH --gpus 1
 
-module purge
-module load miniconda3/24.7.1-0-cpeGNU-23.12
-source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
+module --force purge
+module load Miniforge3/24.7.1-2-hpc1-bdist
+source /software/sse/manual/Miniforge3/24.7.1-2/hpc1-bdist/etc/profile.d/conda.sh
 conda activate fmri_proj
 export PYTHONNOUSERSITE=1
 export OMP_NUM_THREADS=1
@@ -23,7 +22,7 @@ mkdir -p logs
 
 
 # --- Load experiment grid ---
-source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
+source "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
 
 # --- Pick up the ONE RUN_ID passed by the submitter ---
 
@@ -84,9 +83,12 @@ for k in $(seq 0 $((tasks_per_job-1))); do
     echo "behavior_embeddings=$behavior_cols"
     echo "unfreeze_last_n=$unfreeze_last_n lr=$lr weight_decay=$weight_decay batch_size=$batch_size"
     echo "=============================="
+    echo "\$CONDA_PREFIX=$CONDA_PREFIX"
+    which conda; conda -V
+    which python; python -V 
 
     # --- Launch Python job ---
-    python reg_finetune_refactored.py \
+    HPO_TRIALS=30 python reg_finetune_refactored.py \
       --participant_id "$participant_id" \
       --n_fold "$n_fold" \
       --model "$model_path" \

@@ -1,8 +1,8 @@
 #!/bin/bash
 # set -euo pipefail
 
-source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
-source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
+# source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
+source "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
 
 TASKS_PER_JOB=1
 chunk_size=1000
@@ -27,6 +27,10 @@ declare -a batches_to_submit=()
 for start in $(seq 0 $chunk_size $((total_tasks - 1))); do
     batches_to_submit+=($start)
 done
+
+# for start in $(seq 0 1 1); do
+#     batches_to_submit+=($start)
+# done
 
 attempt=1
 while [ ${#batches_to_submit[@]} -gt 0 ]; do
