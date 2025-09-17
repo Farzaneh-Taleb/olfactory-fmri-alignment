@@ -22,7 +22,7 @@ mkdir -p logs
 
 
 # --- Load experiment grid ---
-source "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/grid.sh"
+source "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
 
 
 # --- Index math ---
@@ -30,7 +30,7 @@ index=${SLURM_ARRAY_TASK_ID}
 
 num_datasets=${#datasets[@]}
 num_subjects=${#subjects[@]}
-num_folds=${#folds[@]}
+num_folds=${#n_folds[@]}
 num_components=${#n_components[@]}
 num_models=${#models[@]}
 num_behaviors=${#behavior_embeddings[@]}
@@ -51,14 +51,14 @@ zscore_idx=$(( index % num_zscores ))
 
 ds=${datasets[$ds_idx]}
 participant_id=${subjects[$subj_idx]}
-n_fold=${folds[$fold_idx]}
+n_fold=${n_folds[$fold_idx]}
 c=${n_components[$ncomp_idx]}
 model=${models[$model_idx]}
 behavior_embedding=${behavior_embeddings[$behavior_idx]}
 z_score=${z_scores[$zscore_idx]}
 
 # --- Deterministic per-experiment seed ---
-RUN_ID="${RUN_ID:-DEFAULT_RUN}"
+# RUN_ID="${RUN_ID:-DEFAULT_RUN}"
 
 echo "RUN_ID=$RUN_ID"
 echo "ds=$ds participant_id=$participant_id n_fold=$n_fold n_components=$c model=$model behavior_embeddings='$behavior_embedding' z_score=$z_score"

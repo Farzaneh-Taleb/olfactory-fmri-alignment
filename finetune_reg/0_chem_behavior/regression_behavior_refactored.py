@@ -21,7 +21,9 @@ def main():
     args = parser.parse_args()
     args = parse_common_args(args)
     
-    model_name = args.model
+    model_name_path = args.model
+    model_path = model_name_path.split('/')[0]
+    model_name = model_name_path.split('/')[1]
     m = MODELS.index(model_name)
     participant_id = args.participant_id
     n_components = args.n_components
@@ -63,9 +65,9 @@ def main():
             # Prepare data for all folds
        
 
-        out_base = Path(BASE_DIR) / f"{out_dir}_metrics_{run_id}"
+        out_base = Path(BASE_DIR) / f"{out_dir}_behaviormetrics_{run_id}"
         out_base.mkdir(parents=True, exist_ok=True)
-        out_file = out_base / f"metrics_model-{model_name}_ds-{ds}_runid-{run_id}.csv"
+        out_file = out_base / f"metrics_model-{model_name}_ds-{ds}.csv"
 
 
         
