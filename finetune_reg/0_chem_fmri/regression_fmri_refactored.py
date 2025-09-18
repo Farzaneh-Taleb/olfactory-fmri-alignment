@@ -43,40 +43,46 @@ def main():
     args = parser.parse_args()
     args = parse_common_args(args)
 
-    model_name = args.model
+    model_name_path = args.model
+    model_path = model_name_path.split('/')[0]
+    model_name = model_name_path.split('/')[1]
     m = MODELS.index(model_name)
     participant_id = args.participant_id
-    roi = args.roi
     n_components = args.n_components
     n_fold = args.n_fold
     out_dir = args.out_dir
-    tr = args.tr
-    z_score = bool(args.z_score)
+    z_score = args.z_score
     ds = args.ds  # use dataset from args for consistency with your other script
-    run_id = args.run_id
+    embed_type='can'
+    embed_cols = args.behavior_embeddings or get_descriptors(ds)
+    run_id=args.run_id
+    
+    tr = args.tr
+    
     # If TR=-1, choose the peak TR from P_VALUES for this ROI/subject
     i_roi = ROIS.index(roi)
     tr_orig = tr
+    roi = args.roi
+
     if tr == -1:
         tr = P_VALUES[i_roi][participant_id - 1]
 
     # Output path setup
-    out_base = Path(BASE_DIR) / f"{out_dir}_fmri_metrics_{run_id}"
-    out_base.mkdir(parents=True, exist_ok=True)
-    out_file = out_base / f"metricsfmri_model-{model_name}_ds-{ds}_runid-{run_id}.csv"
-
+    
     # Loop over layers
     for layer in range(1, LAYERS_END[m] + 1):
         print(f"Processing layer {layer}")
-        train_embeddings_list, test_embeddings_list = [], []
-        train_fmri_list,       test_fmri_list       = [], []
+        train_embeddings= []
+        train_fmris=[]
+        test_embeddings=[]
+        test_fmris=[]
 
 
         # Load fMRI once per layer (same TR/ROI/subject)
         fmri_data, cids = load_fmri_data(participant_id, roi, tr, z_score=z_score)
 
         for i_fold in range(n_fold):
-            print(f"Fold {i_fold}, Layer {layer}")
+            print(i_fold,layer)
 
             # CIDs per fold
             train_cids, test_cids = load_fold_cids(n_fold, i_fold, ds)
@@ -89,27 +95,33 @@ def main():
             train_emb = load_model_embeddings(ds, model_name, train_cids, layer, embed_type='can')
             test_emb = load_model_embeddings(ds, model_name, test_cids, layer, embed_type='can')
 
-            train_embeddings_list.append(train_emb)
-            test_embeddings_list.append(test_emb)
-            train_fmri_list.append(fmri_train)
-            test_fmri_list.append(fmri_test)
+            train_embeddings.append(train_emb)
+            test_embeddings.append(test_emb)
+            train_fmris.append(fmri_train)
+            test_fmris.append(fmri_test)
+        
+        out_base = Path(BASE_DIR) / f"{out_dir}_fmrimetrics_{run_id}"
+        out_base.mkdir(parents=True, exist_ok=True)
+        out_file = out_base / f"metricsfmri_model-{model_name}_ds-{ds}.csv"
 
             # Compute correlations: X=embeddings, Y=fMRI
         metrics = compute_correlation(
-            train_embeddings_list, train_fmri_list, test_embeddings_list, test_fmri_list,
+            train_embeddings, train_fmris, test_embeddings, test_fmris,
             n_components=n_components,z_score=z_score
         )
+        Y = np.vstack(test_fmris)   # shape = (N_total_TRs, N_voxels)
+        targets = np.arange(Y.shape[1]) 
         # Attach metadata
         metrics = metrics.assign(
             model=model_name,
             ds=ds,
             participant_id=participant_id,
-            roi=roi,
             layer=layer,
             n_fold=n_fold,
-            i_fold=i_fold,
             n_components=n_components,
+            target = targets,
             z_score=z_score,
+            roi=roi,
             tr=tr_orig,
             date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             run_id=os.environ.get("RUN_ID", "UNKNOWN")

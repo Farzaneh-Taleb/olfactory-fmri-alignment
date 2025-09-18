@@ -56,7 +56,9 @@ def main():
     args = parser.parse_args()
     args = parse_common_args(args)
 
-    model_name     = args.model
+    model_name_path = args.model
+    model_path = model_name_path.split('/')[0]
+    model_name = model_name_path.split('/')[1]
     m              = MODELS.index(model_name)
     participant_id = args.participant_id
     roi            = args.roi
@@ -89,10 +91,10 @@ def main():
     # Output
     out_base = Path(BASE_DIR) / f"{out_dir}_fmrifinetuned_metrics_{run_id}"
     out_base.mkdir(parents=True, exist_ok=True)
-    out_file = out_base / f"metrics_model-{model_name}_ds-{ds}_runid-{run_id}.csv"
+    out_file = out_base /  f"metrics_model-{model_name}_ds-{ds}_unfreeze-{unfreeze_last_n}_behembd-{beh_val}.csv"
 
     # Iterate **0..LAYERS_END[m] inclusive** (finetuned embeddings were saved 0-based)
-    for layer in range(0, LAYERS_END[m] + 1):
+    for layer in range(1, LAYERS_END[m] + 1):
         print(f"[Layer {layer}] ROI={roi}, subj={participant_id}, TR={tr} (arg TR={tr_orig})")
 
         # Load fMRI once per layer (same TR/ROI/subject); then slice per fold CIDs
@@ -123,6 +125,7 @@ def main():
                 participant_id=participant_id,
                 behavior_embeddings=beh_val,
                 unfreeze_last_n=unfreeze_last_n,
+                n_fold=n_fold
             )
             test_emb = load_finetuned_model_embeddings(
                 ds=ds,
@@ -136,6 +139,8 @@ def main():
                 participant_id=participant_id,
                 behavior_embeddings=beh_val,
                 unfreeze_last_n=unfreeze_last_n,
+                n_fold=n_fold,
+                
                 
             )
 
@@ -151,6 +156,7 @@ def main():
             test_embeddings_list,   # X_test per fold
             test_fmri_list,         # Y_test per fold (fMRI)
             n_components=n_components,
+            z_score=z_score
         )
         # Suppose test_fmri_list is a list of (TRs, V) arrays
         Y = np.vstack(test_fmri_list)   # shape = (N_total_TRs, N_voxels)

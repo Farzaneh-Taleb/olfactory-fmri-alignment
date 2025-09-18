@@ -1,30 +1,32 @@
 #!/bin/bash -l
-#
+#SBATCH -A naiss2025-22-958
 #SBATCH -J moljob
 #SBATCH -o logs/output_%A_%a.out
 #SBATCH -e logs/error_%A_%a.err
-#SBATCH -t 10:00:00
+#SBATCH -t 4:00:00
 #SBATCH -n 1
-#SBATCH --mem=8G
-#SBATCH --gpus 1
+#SBATCH -p shared
 
-module --force purge
-module load Miniforge3/24.7.1-2-hpc1-bdist
-source /software/sse/manual/Miniforge3/24.7.1-2/hpc1-bdist/etc/profile.d/conda.sh
+mkdir -p logs
+
+# --- Environment ---
+module purge
+module load miniconda3/24.7.1-0-cpeGNU-23.12
+source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
 conda activate fmri_proj
 export PYTHONNOUSERSITE=1
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
+
+PYTHON_EXEC="$(which python)"
 
 # --- Load FMRI grid ---
-source "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/fmri_grid.sh"
+source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
 
 # --- Index math ---
 index=${SLURM_ARRAY_TASK_ID}
 
 num_datasets=${#datasets[@]}
 num_subjects=${#subjects[@]}
-num_folds=${#folds[@]}
+num_folds=${#n_folds[@]}
 num_components=${#n_components[@]}
 num_models=${#models[@]}
 num_rois=${#rois[@]}
@@ -47,7 +49,7 @@ zs_idx=$(( index % num_zs ))
 
 ds=${datasets[$ds_idx]}
 subject=${subjects[$subj_idx]}
-n_fold=${folds[$fold_idx]}
+n_fold=${n_folds[$fold_idx]}
 n_comp=${n_components[$ncomp_idx]}
 model=${models[$model_idx]}
 roi=${rois[$roi_idx]}
@@ -60,7 +62,7 @@ OUT_DIR="${OUT_DIR:-May15_reg}"
 
 echo "RUN_ID=$RUN_ID"
 echo "Using Python: $PYTHON_EXEC"
-$PYTHON_EXEC -V
+# $PYTHON_EXEC -V
 
 echo "Config:"
 echo "  ds=$ds subject=$subject n_fold=$n_fold n_components=$n_comp"

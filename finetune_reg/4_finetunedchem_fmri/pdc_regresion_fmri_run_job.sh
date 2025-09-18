@@ -1,104 +1,125 @@
 #!/bin/bash -l
-#
-#SBATCH -J finetunedchem_behavior
+#SBATCH -A naiss2025-22-958
+#SBATCH -J moljob
 #SBATCH -o logs/output_%A_%a.out
 #SBATCH -e logs/error_%A_%a.err
-#SBATCH -t 1:00:00
+#SBATCH -t 4:00:00
 #SBATCH -n 1
-#SBATCH --mem=8G
-#SBATCH --gpus 1
+#SBATCH -p shared
 
-set -euo pipefail
-
-module --force purge
-module load Miniforge3/24.7.1-2-hpc1-bdist
-source /software/sse/manual/Miniforge3/24.7.1-2/hpc1-bdist/etc/profile.d/conda.sh
-conda activate fmri_proj
-export PYTHONNOUSERSITE=1
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-
-echo "Using Python at: $(which python)"
-python -V
 mkdir -p logs
 
-PYTHON_EXEC="${PYTHON_EXEC:-python}"
+# --- Environment ---
+module purge
+module load miniconda3/24.7.1-0-cpeGNU-23.12
+source /cfs/klemming/projects/supr/olfactory_alignment/conda.init.sh
+conda activate fmri_proj
+export PYTHONNOUSERSITE=1
 
-GRID_FILE="/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid2.sh"
+PYTHON_EXEC="$(which python)"
+
+# --- Grid arrays (subjects, n_folds, n_components) ---
+: "${GRID_FILE:?GRID_FILE must be exported by the submitter}"
 [ -f "$GRID_FILE" ] || { echo "Grid file not found: $GRID_FILE"; exit 1; }
+# shellcheck source=/dev/null
 source "$GRID_FILE"
 
-# FMRI-specific axes (not in grid.sh)
+# --- fMRI axes (define here unless you move them into GRID_FILE) ---
 rois=("PirF" "PirT" "AMY" "OFC")
 trs=(0 1 2 3 4 5 -1)
 
-# Use arrays from grid.sh:
-# datasets, subjects, n_folds, models, behavior_embeddings, unfreeze_layers, n_components, z_scores
-# Also OUT_DIR, RUN_ID exist in grid.sh
+# --- Required exports from submit script (per-array constants) ---
+: "${OUT_DIR:?OUT_DIR is required}"
+: "${RUN_ID:?RUN_ID is required}"
 
-local_index=${SLURM_ARRAY_TASK_ID}
-global_index=$((OFFSET + local_index))
+: "${MODEL:?MODEL is required}"
+: "${BEH_EMB}"
+: "${UNFREEZE_LAST_N:?UNFREEZE_LAST_N is required (can be 'None')}"
+: "${DS:?DS is required}"
+: "${Z_SCORE:?Z_SCORE is required}"
+: "${NCOMP_IDX:?NCOMP_IDX is required (index into n_components[])}"
 
-# Sizes
-num_ds=${#datasets[@]}
+: "${OFFSET:?OFFSET is required}"
+: "${COUNT:?COUNT is required}"
+
+# --- Sanity / ranges ---
 num_subjects=${#subjects[@]}
 num_folds=${#n_folds[@]}
-num_models=${#models[@]}
-num_behaviors=${#behavior_embeddings[@]}
-num_unfreeze=${#unfreeze_layers[@]}
-num_ncomp=${#n_components[@]}
 num_rois=${#rois[@]}
 num_trs=${#trs[@]}
-num_z=${#z_scores[@]}
 
-total_jobs=$(( num_ds * num_subjects * num_folds * num_models * num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z ))
+(( num_subjects > 0 )) || { echo "subjects array is empty"; exit 1; }
+(( num_folds  > 0 )) || { echo "n_folds array is empty"; exit 1; }
+(( num_rois   > 0 )) || { echo "rois array is empty"; exit 1; }
+(( num_trs    > 0 )) || { echo "trs array is empty"; exit 1; }
 
-if (( global_index < 0 || global_index >= total_jobs )); then
-  echo "Index $global_index out of range (0..$((total_jobs-1)))."
+if (( NCOMP_IDX < 0 || NCOMP_IDX >= ${#n_components[@]} )); then
+  echo "NCOMP_IDX out of range: $NCOMP_IDX (size=${#n_components[@]})"
+  exit 1
+fi
+n_components_val="${n_components[$NCOMP_IDX]}"
+
+local_id=${SLURM_ARRAY_TASK_ID:-0}
+if (( local_id < 0 || local_id >= COUNT )); then
+  echo "Local array index $local_id out of [0,$((COUNT-1))]"
   exit 1
 fi
 
-# Decode (order must match total_jobs multiplication order above)
-ds_idx=$(( global_index / (num_subjects * num_folds * num_models * num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_ds ))
-subj_idx=$(( global_index / (num_folds * num_models * num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_subjects ))
-fold_idx=$(( global_index / (num_models * num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_folds ))
-model_idx=$(( global_index / (num_behaviors * num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_models ))
-behavior_idx=$(( global_index / (num_unfreeze * num_ncomp * num_rois * num_trs * num_z) % num_behaviors ))
-unfreeze_idx=$(( global_index / (num_ncomp * num_rois * num_trs * num_z) % num_unfreeze ))
-ncomp_idx=$(( global_index / (num_rois * num_trs * num_z) % num_ncomp ))
-roi_idx=$(( global_index / (num_trs * num_z) % num_rois ))
-tr_idx=$(( global_index / num_z % num_trs ))
-z_idx=$(( global_index % num_z ))
+# --- Decode subject × fold × roi × tr from linear index ---
+linear=$(( OFFSET + local_id ))
+total_sfrt=$(( num_subjects * num_folds * num_rois * num_trs ))
+if (( linear < 0 || linear >= total_sfrt )); then
+  echo "Global linear index $linear out of [0,$((total_sfrt-1))]"
+  exit 1
+fi
 
-# Values
-ds=${datasets[$ds_idx]}
-participant_id=${subjects[$subj_idx]}
-fold=${n_folds[$fold_idx]}
-model=${models[$model_idx]}
-beh="${behavior_embeddings[$behavior_idx]}"   # "" means: default behavior columns in Python
-unfreeze_last_n="${unfreeze_layers[$unfreeze_idx]}"  # can be "None"
-ncomp="${n_components[$ncomp_idx]}"           # "None" or int
-roi=${rois[$roi_idx]}
-tr=${trs[$tr_idx]}
-z_score=${z_scores[$z_idx]}
+# order: subjects × folds × rois × trs
+stride_f=$(( num_rois * num_trs ))
+stride_s=$(( num_folds * stride_f ))
 
-echo "Global index: $global_index (OFFSET=$OFFSET, local=$local_index)"
-echo "ds=$ds subj=$participant_id fold=$fold model=$model beh='$beh' unf=$unfreeze_last_n ncomp=$ncomp roi=$roi tr=$tr z=$z_score"
-echo "OUT_DIR=$OUT_DIR RUN_ID=$RUN_ID"
-echo "Python: $(which python)"; python -V
+subj_idx=$(( linear / stride_s ))
+rem=$(( linear % stride_s ))
 
-export RUN_ID  # picked up by the Python script if not provided as CLI
+fold_idx=$(( rem / stride_f ))
+rem2=$(( rem % stride_f ))
 
-python regression_fmri.py \
+roi_idx=$(( rem2 / num_trs ))
+tr_idx=$(( rem2 % num_trs ))
+
+participant_id="${subjects[$subj_idx]}"
+fold="${n_folds[$fold_idx]}"
+roi="${rois[$roi_idx]}"
+tr="${trs[$tr_idx]}"
+
+echo "Running fMRI regression (combo-per-array; chunked subjects×folds×rois×trs)"
+echo "  DS:               $DS"
+echo "  Subject:          $participant_id (idx=$subj_idx / ${num_subjects})"
+echo "  n_fold:           $fold (idx=$fold_idx / ${num_folds})"
+echo "  ROI / TR:         $roi / $tr (roi_idx=$roi_idx / ${num_rois}, tr_idx=$tr_idx / ${num_trs})"
+echo "  MODEL:            $MODEL"
+echo "  BEH_EMB:          $BEH_EMB"
+echo "  UNFREEZE_LAST_N:  $UNFREEZE_LAST_N"
+echo "  Z_SCORE:          $Z_SCORE"
+echo "  NCOMP_IDX/value:  $NCOMP_IDX / $n_components_val"
+echo "  OUT_DIR:          $OUT_DIR"
+echo "  RUN_ID:           $RUN_ID"
+echo "  OFFSET/COUNT:     $OFFSET / $COUNT"
+echo "  SLURM_ARRAY_TASK_ID: $local_id"
+echo "Python: $PYTHON_EXEC"; python -V
+
+export RUN_ID  # make available to Python if not passed
+
+# --- Launch regression ---
+"$PYTHON_EXEC" regression_fmri.py \
   --participant_id "$participant_id" \
-  --model "$model" \
-  --ds "$ds" \
-  --n_components "$ncomp" \
+  --model "$MODEL" \
+  --ds "$DS" \
+  --n_components "$n_components_val" \
   --out_dir "$OUT_DIR" \
   --n_fold "$fold" \
-  --z_score "$z_score" \
+  --z_score "$Z_SCORE" \
   --roi "$roi" \
   --tr "$tr" \
-  --behavior_embeddings "$beh" \
-  --unfreeze_last_n "$unfreeze_last_n" \
+  --behavior_embeddings "$BEH_EMB" \
+  --unfreeze_last_n "$UNFREEZE_LAST_N" \
   --run_id "$RUN_ID"

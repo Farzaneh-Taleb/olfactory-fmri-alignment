@@ -1,11 +1,13 @@
 #!/bin/bash
-# set -euo pipefail
 
-# source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
-source "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_grid.sh"
+# reset modules
+source /opt/cray/pe/cpe/23.12/restore_lmod_system_defaults.sh
+
+# load fmri grid
+source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
 
 compute_total() {
-  echo $(( ${#datasets[@]} * ${#subjects[@]} * ${#folds[@]} \
+  echo $(( ${#datasets[@]} * ${#subjects[@]} * ${#n_folds[@]} \
          * ${#n_components[@]} * ${#models[@]} * ${#rois[@]} \
          * ${#trs[@]} * ${#z_scores[@]} ))
 }
@@ -13,7 +15,7 @@ compute_total() {
 mkdir -p logs
 total_jobs=$(compute_total)
 
-export RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+
 export OUT_DIR="${OUT_DIR:-May15_reg}"
 
 echo "RUN_ID=${RUN_ID}"
