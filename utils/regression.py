@@ -43,7 +43,13 @@ def _mean_pearson_corr(Y_true, Y_pred):
             r, _ = pearsonr(Y_true[:, j], Y_pred[:, j])
             r_vals.append(r)
     return float(np.nanmean(r_vals))
-
+# --- correlation scorers ---
+def _pearson_corr(y_true, y_pred):
+    # single-output 1D arrays
+    if np.std(y_true) == 0 or np.std(y_pred) == 0:
+        return 0.0
+    r, _ = pearsonr(y_true, y_pred)
+    return float(r)
 
 def custom_ridge_regression(X, y, alpha=None):
 
@@ -95,7 +101,96 @@ def custom_ridge_regression(X, y, alpha=None):
     return estimator
 
 
+def fit_ridgecv_per_target(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    alphas: np.ndarray | list = None,
 
+):
+    """
+    Learn a separate alpha for each target (column of y) using KFold CV with a correlation scorer.
+    Returns per-target alphas, OOF predictions/correlations, and a final multi-output predictor.
+    """
+    corr_scorer_1d = make_scorer(_pearson_corr, greater_is_better=True)
+    if alphas is None:
+        alphas = np.logspace(-4, 8, 25)
+    alphas = np.asarray(alphas, dtype=float)
+
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float)
+    assert y.ndim == 2, "y must be (n_samples, n_targets)"
+
+    n, m = y.shape
+    kf = KFold(n_splits=5, shuffle=True, random_state=SEED)
+
+    # OOF buffers
+    oof_pred = np.zeros((n, m), dtype=float)
+    oof_mask = np.zeros(n, dtype=bool)
+
+    # store chosen alpha per target per fold
+    alpha_choices = []  # list of (m,) arrays
+
+    # CV loop
+    for tr_idx, te_idx in kf.split(X, y):
+        X_tr, X_te = X[tr_idx], X[te_idx]
+        y_tr, y_te = y[tr_idx], y[te_idx]
+
+        alphas_this_fold = np.zeros(m, dtype=float)
+        preds_this_fold = np.zeros((len(te_idx), m), dtype=float)
+
+        # Fit a RidgeCV per target (single-output) so each gets its own alpha
+        for j in range(m):
+            # single-output RidgeCV with correlation scorer
+            rcj = RidgeCV(alphas=alphas, scoring=corr_scorer_1d, store_cv_values=False)
+            rcj.fit(X_tr, y_tr[:, j])
+            alphas_this_fold[j] = float(rcj.alpha_)
+            preds_this_fold[:, j] = rcj.predict(X_te)
+
+        # fill OOF containers
+        oof_pred[te_idx] = preds_this_fold
+        oof_mask[te_idx] = True
+        alpha_choices.append(alphas_this_fold)
+
+    # OOF correlations per target
+    oof_corr = np.zeros(m, dtype=float)
+    for j in range(m):
+        if np.std(y[oof_mask, j]) == 0 or np.std(oof_pred[oof_mask, j]) == 0:
+            oof_corr[j] = 0.0
+        else:
+            r, _ = pearsonr(y[oof_mask, j], oof_pred[oof_mask, j])
+            oof_corr[j] = float(r)
+
+    # Median alpha per target across folds
+    alpha_matrix = np.vstack(alpha_choices)        # shape: (n_splits, m)
+    alpha_per_target = np.median(alpha_matrix, axis=0)  # shape: (m,)
+
+    # Final per-target models on all data
+    final_models = []
+    coefs = np.zeros((X.shape[1], m), dtype=float)
+    intercepts = np.zeros(m, dtype=float)
+
+    for j in range(m):
+        rj = Ridge(alpha=float(alpha_per_target[j]))
+        rj.fit(X, y[:, j])
+        final_models.append(rj)
+        coefs[:, j] = rj.coef_.ravel()
+        intercepts[j] = float(rj.intercept_)
+
+    class PerTargetRidge:
+        """Simple wrapper to predict all targets with their own alpha."""
+        def __init__(self, models, coefs, intercepts):
+            self.models = models
+            self.coefs_ = coefs           # shape (n_features, n_targets)
+            self.intercepts_ = intercepts # shape (n_targets,)
+
+        def predict(self, Xnew: np.ndarray) -> np.ndarray:
+            Xnew = np.asarray(Xnew, dtype=float)
+            # Use stored coefs for speed (vectorized)
+            return Xnew @ self.coefs_ + self.intercepts_
+
+    estimator = PerTargetRidge(final_models, coefs, intercepts)
+    return estimator
 # def train_and_eval_prekfold(
 #     X_train, y_train, X_test, y_test, n_components=None,
 #     *, n_permutations: int = 1000, use_abs_corr: bool = False
@@ -293,7 +388,7 @@ def train_and_eval_prekfold(
     
 
     # Fit & predict (expects custom_ridge_regression in scope)
-    model = custom_ridge_regression(X_train, y_train, None)
+    model = fit_ridgecv_per_target(X_train, y_train, None)
     predicted = model.predict(X_test)
     print("predited",predicted.shape)
 
@@ -327,7 +422,7 @@ def pipeline(Xs_train, ys_train, Xs_test, n_components=None,z_score=False):
     
 
 
-def compute_correlation(Xs_train, ys_train, Xs_test, ys_test, n_components=None,z_score=False):
+def compute_correlation(Xs_train, ys_train, Xs_test, ys_test, n_components=None,z_score=False,metrics=True):
     """
     Compute correlations for regression analysis.
 
@@ -352,28 +447,34 @@ def compute_correlation(Xs_train, ys_train, Xs_test, ys_test, n_components=None,
 
     P = np.vstack(preds_list)   # (N_total, V)
     Y = np.vstack(y_list)       # (N_total, V)
-    correlations, mse_errors = compute_targetwise_metrics(P, Y)
 
-    # Permutation tests (separate function)
-    p_value_correlation, p_value_mse = permutation_test_metrics(
-        P,
-        Y,
-        correlations,
-        mse_errors,
-        n_permutations=1000,
-        use_abs_corr=False,
-        seed=SEED,
-    )
+    metrics_df = pd.DataFrame()
 
-    V = Y.shape[1]
-    target_ids = np.arange(V)  # per-voxel identifier
+    if metrics:
+        correlations, mse_errors = compute_targetwise_metrics(P, Y)
 
-    metrics_df = pd.DataFrame({
-    "target_id": target_ids,
-    "correlation": correlations,           # 1-D, length V
-    "mse": mse_errors,                     # 1-D, length V
-    "p_value_correlation": p_value_correlation,  # 1-D, length V
-    "p_value_mse": p_value_mse,                  # 1-D, length V
+        # Permutation tests (separate function)
+        p_value_correlation, p_value_mse = permutation_test_metrics(
+            P,
+            Y,
+            correlations,
+            mse_errors,
+            n_permutations=1000,
+            use_abs_corr=False,
+            seed=SEED,
+        )
+
+        V = Y.shape[1]
+        target_ids = np.arange(V)  # per-voxel identifier
+
+        metrics_df = pd.DataFrame({
+        "target_id": target_ids,
+        "correlation": correlations,           # 1-D, length V
+        "mse": mse_errors,                     # 1-D, length V
+        "p_value_correlation": p_value_correlation,  # 1-D, length V
+        "p_value_mse": p_value_mse,                  # 1-D, length V
 })
 
     return metrics_df
+    
+
