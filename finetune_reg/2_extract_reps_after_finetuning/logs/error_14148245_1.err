@@ -1,0 +1,22 @@
+***********************************
+You have loaded a Miniforge3 module
+***********************************
+---------------------------------------------------------------------------------------------------
+NOTE: NSC strongly advices against placing 'mamba activate' (or 'conda
+activate', with or without
+      arguments) in your shell initialization files, (e.g. '.bashrc' or
+'.bash_profile') since
+      this severely alters the environment for running software in ways that
+cause unpredictable
+      issues that can be difficult to diagnose.
+---------------------------------------------------------------------------------------------------
+
+Traceback (most recent call last):
+  File "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/2_extract_reps_after_finetuning/extract_reps_finetune.py", line 124, in <module>
+    main()
+  File "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/2_extract_reps_after_finetuning/extract_reps_finetune.py", line 101, in main
+    ckpt = get_latest_checkpoint(model_dir)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/utils/helpers.py", line 560, in get_latest_checkpoint
+    raise FileNotFoundError(f"Model directory does not exist: {path}")
+FileNotFoundError: Model directory does not exist: /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_2_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_0_sagar2023

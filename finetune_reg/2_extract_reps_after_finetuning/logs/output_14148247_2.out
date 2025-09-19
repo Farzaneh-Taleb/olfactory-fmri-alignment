@@ -1,0 +1,26 @@
+Using Python at: /home/x_farzt/.conda/envs/fmri_proj/bin/python
+Python 3.11.11
+Running per-(model, beh_embed, unfreeze_last_n, ds) array task
+  MODEL(path):      jonghyunlee/ChemBERT_ChEMBL_pretrained
+  Model(name):      ChemBERT_ChEMBL_pretrained
+  DS:               sagar2023
+  Subject:          3
+  Unfreeze last N:  adaptive
+  Embeddings:       
+  n_fold:           10
+  OUT_DIR:          Sep20
+  RUN_ID:           11_finetune_by_fmri
+  SLURM_ARRAY_TASK_ID: 2
+adaptive unfreeze_last_n
+/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_fembeddings_11_finetune_by_fmri
+extracted fold 0
+extracted fold 1
+extracted fold 2
+extracted fold 3
+extracted fold 4
+extracted fold 5
+extracted fold 6
+extracted fold 7
+extracted fold 8
+extracted fold 9
+All done! Extracted representations saved to: /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_fembeddings_11_finetune_by_fmri/reps_ChemBERT_ChEMBL_pretrained_ds-sagar2023_runid-11_finetune_by_fmri_unfreeze-adaptive_behaviorembeddings-all_nfold_10.csv

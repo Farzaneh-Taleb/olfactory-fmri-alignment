@@ -1,0 +1,33 @@
+***********************************
+You have loaded a Miniforge3 module
+***********************************
+---------------------------------------------------------------------------------------------------
+NOTE: NSC strongly advices against placing 'mamba activate' (or 'conda
+activate', with or without
+      arguments) in your shell initialization files, (e.g. '.bashrc' or
+'.bash_profile') since
+      this severely alters the environment for running software in ways that
+cause unpredictable
+      issues that can be difficult to diagnose.
+---------------------------------------------------------------------------------------------------
+
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_0_sagar2023/checkpoint-6 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_1_sagar2023/checkpoint-18 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_2_sagar2023/checkpoint-11 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_3_sagar2023/checkpoint-36 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_4_sagar2023/checkpoint-3 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_5_sagar2023/checkpoint-11 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_6_sagar2023/checkpoint-60 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_7_sagar2023/checkpoint-12 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_8_sagar2023/checkpoint-48 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of RobertaModel were not initialized from the model checkpoint at /proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/Sep20_finetune_models_11_finetune_by_fmri/model_ChemBERTa-zinc-base-v1_10_3_['intensity', 'pleasantness', 'fishy', 'burnt', 'sour', 'decayed', 'musky', 'fruity', 'sweaty', 'cool', 'floral', 'sweet', 'warm', 'bakery', 'spicy']_adaptive_9_sagar2023/checkpoint-22 and are newly initialized: ['roberta.pooler.dense.bias', 'roberta.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
