@@ -39,7 +39,10 @@ def main():
     parser = create_regression_behavior_parser()
     args = parser.parse_args()
 
-    model_name     = args.model
+    # model_name     = args.model
+    model_name_path = args.model
+    model_path = model_name_path.split('/')[0]
+    model_name = model_name_path.split('/')[1]
     m              = MODELS.index(model_name)
     participant_id = args.participant_id
     n_components   = args.n_components
@@ -47,7 +50,7 @@ def main():
     out_dir        = args.out_dir
     z_score        = bool(args.z_score)
     ds             = args.ds
-    run_id         = getattr(args, "run_id", os.environ.get("RUN_ID", "UNKNOWN"))
+    run_id         = args.run_id
     embed_type     = "can"
     behavior_embeddings = args.behavior_embeddings or get_descriptors(ds)
     beh_val = (
@@ -62,12 +65,13 @@ def main():
     embed_cols = get_descriptors(ds)
 
     # where to write metrics
-    out_base = Path(BASE_DIR) / f"{out_dir}_behaviortuned_metrics_{run_id}"
+    out_base = Path(BASE_DIR) / f"{out_dir}_behaviortuned_metrics_{run_id}_alphapertarget"
     out_base.mkdir(parents=True, exist_ok=True)
-    out_file = out_base / f"metrics_model-{model_name}_ds-{ds}_runid-{run_id}_unfreeze-{unfreeze_last_n}_behembd-{beh_val}.csv"
+    out_file = out_base / f"metrics_model-{model_name}_ds-{ds}_unfreeze-{unfreeze_last_n}_behembd-{beh_val}.csv"
+    print(f"Writing to {out_file}")
 
     # IMPORTANT: embeddings were saved with 0-based layer indices -> iterate 0..LAYERS_END[m] inclusive
-    for layer in range(0, LAYERS_END[m] + 1):
+    for layer in range(1, LAYERS_END[m] + 1):
         # Collect per-fold data for this layer
         train_embeddings_list, test_embeddings_list = [], []
         train_behaviors_list, test_behaviors_list   = [], []
@@ -97,7 +101,7 @@ def main():
                 embed_type=embed_type,
                 participant_id=participant_id,
                 behavior_embeddings=beh_val,
-                unfreeze_last_n=unfreeze_last_n
+                unfreeze_last_n=unfreeze_last_n,n_fold=n_fold
             )
             test_emb = load_finetuned_model_embeddings(
                 ds=ds,
@@ -110,7 +114,7 @@ def main():
                 embed_type=embed_type,
                 participant_id=participant_id,
                  behavior_embeddings=beh_val,
-                unfreeze_last_n=unfreeze_last_n
+                unfreeze_last_n=unfreeze_last_n,n_fold=n_fold
 
             )
 
@@ -126,6 +130,7 @@ def main():
             test_embeddings_list,
             test_behaviors_list,
             n_components=n_components,
+            z_score=z_score,
         )
 
         # Annotate and save

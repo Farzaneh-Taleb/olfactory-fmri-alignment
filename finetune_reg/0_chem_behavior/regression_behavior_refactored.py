@@ -65,7 +65,7 @@ def main():
             # Prepare data for all folds
        
 
-        out_base = Path(BASE_DIR) / f"{out_dir}_behaviormetrics_{run_id}"
+        out_base = Path(BASE_DIR) / f"{out_dir}_behaviormetrics_{run_id}_alphapertarget"
         out_base.mkdir(parents=True, exist_ok=True)
         out_file = out_base / f"metrics_model-{model_name}_ds-{ds}.csv"
 
@@ -83,7 +83,7 @@ def main():
             layer=layer,
             n_fold=n_fold,
             n_components=n_components,
-            
+            z_score=z_score,
             target=embed_cols,
             date = datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             run_id=os.environ.get("RUN_ID", "UNKNOWN")

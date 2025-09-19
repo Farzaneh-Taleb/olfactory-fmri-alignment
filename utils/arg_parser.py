@@ -12,7 +12,10 @@ def str_list_or_empty(v: str) -> list[str]:
 def none_or_int(value):
     if value.lower() in ("none", ""):
         return None
+    elif value == "adaptive":
+        return "adaptive"
     return int(value)
+
 
 
 def none_or_float(value):
@@ -52,7 +55,7 @@ def create_extract_rep_parser() -> argparse.Namespace:
     parser.add_argument("--behavior_embeddings",type=str_list_or_empty,default=[],
     help="Comma-separated list of behavior embedding columns (or empty)."
 )
-    parser.add_argument("--unfreeze_last_n", type=none_or_int)
+    parser.add_argument("--unfreeze_last_n", type=none_int_or_keywords)
     parser.add_argument("--ds", required=True, type=str)
     parser.add_argument("--out_dir", required=True, type=str)
     parser.add_argument("--run_id", required=True, type=str)
@@ -77,7 +80,7 @@ def create_fmri_parser(description='chem_exploration'):
     parser.add_argument("--behavior_embeddings",type=str_list_or_empty,default=[],
     help="Comma-separated list of behavior embedding columns (or empty)."
 )
-    parser.add_argument("--unfreeze_last_n", type=none_or_int)
+    parser.add_argument("--unfreeze_last_n", type=none_int_or_keywords)
     return parser
 
 def create_fmri_finetune_parser(description='chem_exploration'):
@@ -170,7 +173,7 @@ def create_finetune_parser(description='finetune_by_behavior'):
 
     parser.add_argument(
     '--unfreeze_last_n',
-    type=none_or_int,
+    type=none_int_or_keywords,
     default=None,
     help="Unfreeze last N encoder layers (None/empty = freeze backbone; heads always trainable)."
 )
@@ -180,10 +183,31 @@ def create_finetune_parser(description='finetune_by_behavior'):
     parser.add_argument('--num_train_epochs', type=int, default=10)
     parser.add_argument('--embed_type', type=str, default='can', choices=['can', 'iso'],
                         help="Which text field to use from the dataset CSV.")
+    parser.add_argument('--i_fold', type=int, default=0,
+                        help="Token index to extract from each sequence (default=0 for CLS).")
+    
 
-    # keep --model for labeling/metadata (separate from model_name_path)
+        # ---------- LoRA (optional; defaults keep current behavior) ----------
+    # LoRA flags (default OFF -> current behavior unchanged)
+    parser.add_argument("--use_lora", action="store_true", help="Enable LoRA adapters (default: off)")
+    parser.add_argument("--lora_r", type=int, default=16)
+    parser.add_argument("--lora_alpha", type=int, default=32)
+    parser.add_argument("--lora_dropout", type=float, default=0.05)
+    parser.add_argument(
+        "--lora_target_modules",
+        type=str,
+        default="auto",
+        help=(
+            "LoRA target selection. "
+            "'auto' = attention only (q/k/v/o, out_proj, etc.); "
+            "'auto_all' or 'all' = attention + common MLP (fc1/fc2, intermediate/output, up/down/gate). "
+            "Or pass a comma list (e.g., 'q_proj,k_proj,v_proj,o_proj')."
+        ),
+    )
 
     return parser
+
+
 
 def create_hparm_parser(description='best params parser'):
     parser = argparse.ArgumentParser(description=description)
@@ -194,7 +218,7 @@ def create_hparm_parser(description='best params parser'):
     help="Comma-separated list of behavior embedding columns (or empty)."
 )
     
-    parser.add_argument("--unfreeze_last_n",     type=none_or_int,
+    parser.add_argument("--unfreeze_last_n",     type=none_int_or_keywords,
     default=None,
     help="Unfreeze last N encoder layers (None/empty = freeze backbone; heads always trainable).")
     parser.add_argument("--run_id",            required=True)
@@ -202,6 +226,8 @@ def create_hparm_parser(description='best params parser'):
     parser.add_argument('--n_fold', type=int, required=True)
     parser.add_argument('--metrics_dir', type=str, required=True)
     parser.add_argument('--save_dir', type=str, required=True)
+
+    
     
     
     return parser
@@ -236,7 +262,7 @@ def create_regression_behavior_parser(description="regression_behavior"):
                         help="Number of PCA components (None = skip PCA).")
     parser.add_argument("--behavior_embeddings", type=str_list_or_empty, default=[],
                         help="Comma-separated list of behavior embedding columns (or empty = default).")
-    parser.add_argument("--unfreeze_last_n", type=none_or_int, default=None,
+    parser.add_argument("--unfreeze_last_n", type=none_int_or_keywords, default=None,
                         help="Unfreeze last N encoder layers (None = freeze backbone).")
     parser.add_argument("--z_score", type=lambda v: str(v).lower() == "true", default=False,
                         help="Apply z-scoring (true/false).")
@@ -244,3 +270,39 @@ def create_regression_behavior_parser(description="regression_behavior"):
                         help="Unique run identifier (default from RUN_ID env).")
 
     return parser
+
+
+# def parse_unfreeze_last_n(x):
+#     if x is None:
+#         return "all"                      # None ⇒ unfreeze all
+#     if isinstance(x, str):
+#         s = x.strip().lower()
+#         if s in {"", "none", "all"}:      return "all"
+#         if s in {"adaptive"}: return "adaptive"
+#         return int(s)
+#     if isinstance(x, (int, float)):
+#         return int(x)
+#     raise ValueError(f"Invalid --unfreeze_last_n: {x!r}")
+
+
+def none_int_or_keywords(value):
+    """
+    Accepts:
+      - empty/none  -> None
+      - integers    -> int
+      - 'all'       -> 'all'
+      - 'adaptive'  -> 'adaptive'
+    """
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    if s in {"", "none"}:
+        return None
+    if s in {"all", "adaptive"}:
+        return s
+    try:
+        return int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "invalid value: must be an integer, 'all', or 'adaptive'"
+        )
