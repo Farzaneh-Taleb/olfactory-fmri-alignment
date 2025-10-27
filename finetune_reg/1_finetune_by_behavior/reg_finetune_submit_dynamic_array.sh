@@ -1,70 +1,115 @@
 #!/bin/bash
+# pdc_reg_finetune_submit_chunks.sh
 # set -euo pipefail
 
 source "/proj/rep-learning-robotics/users/x_farzt/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
 
-TASKS_PER_JOB=1
-chunk_size=1000
-sleep_between_batches=5
-sleep_between_retries=600
-dry_run=false  # set to true for testing without sbatch
+# Harmonize flag
+finetune_by="${finetune_by:-${finetyne_by:-beh}}"
 
-# --- sum_n_folds: i_fold axis cardinality across all n_folds entries ---
+# ---- Tunables (adjust to your cluster policy) ----
+TASKS_PER_JOB=${TASKS_PER_JOB:-1}
+chunk_size=${chunk_size:-1000}                 # tasks per array submission
+ARRAY_CONCURRENCY=${ARRAY_CONCURRENCY:-1000}     # --array ...%CONC  (how many tasks run concurrently)
+MAX_ACTIVE_ARRAYS=${MAX_ACTIVE_ARRAYS:-1000}     # how many array jobs you keep in queue at once
+POLL_SECS=${POLL_SECS:-30}                     # how often to re-check queue
+sleep_between_batches=${sleep_between_batches:-3}
+sleep_between_retries=${sleep_between_retries:-600}
+dry_run=${dry_run:-false}
+
+# ---- Helper: current number of your jobs (all states) ----
+my_jobs_count() {
+  squeue -h -u "$USER" | wc -l | awk '{print $1}'
+}
+
+# ---- i_fold sum ----
 sum_n_folds=0
-for nf in "${n_folds[@]}"; do
-  sum_n_folds=$(( sum_n_folds + nf ))
-done
+for nf in "${n_folds[@]}"; do sum_n_folds=$((sum_n_folds + nf)); done
 
-# --- Total configs includes i_fold as an axis via sum_n_folds ---
+# fmri axes
+roi_factor=1; tr_factor=1
+if [ "$finetune_by" = "fmri" ]; then
+  roi_factor=${#rois[@]}
+  tr_factor=${#trs[@]}
+fi
+
+# ---- total configs (each config == one TASKS_PER_JOB slot) ----
 total_configs=$(( ${#datasets[@]} * ${#subjects[@]} * sum_n_folds * ${#models[@]} \
                 * ${#behavior_embeddings[@]} * ${#unfreeze_layers[@]} \
-                * ${#lrs[@]} * ${#weight_decays[@]} * ${#batch_sizes[@]} ))
+                * ${#lrs[@]} * ${#weight_decays[@]} * ${#batch_sizes[@]} \
+                * roi_factor * tr_factor ))
 
 total_tasks=$(( (total_configs + TASKS_PER_JOB - 1) / TASKS_PER_JOB ))
 
 echo "[$(date)] Total configs: $total_configs"
 echo "[$(date)] Bundling $TASKS_PER_JOB per job => $total_tasks tasks"
-echo "[$(date)] RUN_ID=${RUN_ID}"
+echo "[$(date)] RUN_ID=${RUN_ID}  finetune_by=${finetune_by}"
+if [ "$finetune_by" = "fmri" ]; then
+  echo "[$(date)] ROI levels=${#rois[@]} TR levels=${#trs[@]}"
+fi
+echo "[$(date)] Throttle: MAX_ACTIVE_ARRAYS=$MAX_ACTIVE_ARRAYS, ARRAY_CONCURRENCY=$ARRAY_CONCURRENCY"
 
-declare -a batches_to_submit=()
+# ---- Build batch offsets (each becomes one array job) ----
+declare -a pending_offsets=()
 for start in $(seq 0 $chunk_size $((total_tasks - 1))); do
-  batches_to_submit+=($start)
+  pending_offsets+=("$start")
 done
 
 attempt=1
-while [ ${#batches_to_submit[@]} -gt 0 ]; do
-  echo "[$(date)] Attempt $attempt: ${#batches_to_submit[@]} batches to submit"
+while [ ${#pending_offsets[@]} -gt 0 ]; do
+  echo "[$(date)] Attempt $attempt: ${#pending_offsets[@]} arrays left to submit"
 
-  failed_batches=()
-  for start in "${batches_to_submit[@]}"; do
-    end=$((start + chunk_size - 1))
-    [ $end -ge $((total_tasks - 1)) ] && end=$((total_tasks - 1))
+  # Throttle: wait until our active arrays < MAX_ACTIVE_ARRAYS
+  while true; do
+    active=$(my_jobs_count || echo 999999)
+    if [[ "$active" =~ ^[0-9]+$ ]] && [ "$active" -lt "$MAX_ACTIVE_ARRAYS" ]; then
+      break
+    fi
+    echo "[$(date)] Queue full ($active >= $MAX_ACTIVE_ARRAYS). Sleeping $POLL_SECS s…"
+    sleep "$POLL_SECS"
+  done
+
+  failed_next_round=()
+  # Submit as many as we have headroom for
+  headroom=$(( MAX_ACTIVE_ARRAYS - active ))
+  [ $headroom -lt 1 ] && headroom=1
+
+  to_submit_count=$(( headroom < ${#pending_offsets[@]} ? headroom : ${#pending_offsets[@]} ))
+
+  for ((i=0; i<to_submit_count; i++)); do
+    start="${pending_offsets[$i]}"
+    end=$((start + chunk_size - 1)); [ $end -ge $((total_tasks - 1)) ] && end=$((total_tasks - 1))
     count=$((end - start + 1))
 
-    echo "[$(date)] Submitting batch: offset=$start count=$count (RUN_ID=$RUN_ID)"
+    echo "[$(date)] Submitting array: OFFSET=$start COUNT=$count (RUN_ID=$RUN_ID) conc=%${ARRAY_CONCURRENCY}"
 
     if [ "$dry_run" = true ]; then
-      echo "DRY-RUN: sbatch --export=ALL,OFFSET=$start,TASKS_PER_JOB=$TASKS_PER_JOB,RUN_ID=$RUN_ID --array=0-$((count-1)) pdc_reg_finetune_run_job.sh"
+      echo "DRY-RUN: sbatch --export=ALL,OFFSET=$start,TASKS_PER_JOB=$TASKS_PER_JOB,RUN_ID=$RUN_ID --array=0-$((count-1))%${ARRAY_CONCURRENCY} pdc_reg_finetune_run_job.sh"
     else
-      sbatch --export=ALL,OFFSET=$start,TASKS_PER_JOB=$TASKS_PER_JOB,RUN_ID=$RUN_ID \
-             --array=0-$((count-1)) pdc_reg_finetune_run_job.sh
-      submit_status=$?
-      if [ $submit_status -ne 0 ]; then
-        echo "[$(date)] Batch offset=$start FAILED (status=$submit_status), will retry."
-        failed_batches+=($start)
+      sbatch --export=ALL,OFFSET="$start",TASKS_PER_JOB="$TASKS_PER_JOB",RUN_ID="$RUN_ID" \
+             --array=0-$((count-1))%${ARRAY_CONCURRENCY} pdc_reg_finetune_run_job.sh
+      rc=$?
+      if [ $rc -ne 0 ]; then
+        echo "[$(date)] ❌ Submission FAILED for offset=$start (rc=$rc). Will retry."
+        failed_next_round+=("$start")
       else
-        echo "[$(date)] Batch offset=$start submitted successfully."
+        echo "[$(date)] ✅ Submitted offset=$start successfully."
       fi
       sleep "$sleep_between_batches"
     fi
   done
 
-  batches_to_submit=("${failed_batches[@]}")
-  if [ ${#batches_to_submit[@]} -gt 0 ]; then
-    echo "[$(date)] Some batches failed (${#batches_to_submit[@]}). Retrying in $sleep_between_retries seconds..."
+  # Remove the ones we attempted (first to_submit_count elements)
+  pending_offsets=("${pending_offsets[@]:$to_submit_count}")
+
+  # Requeue failures to the end
+  if [ ${#failed_next_round[@]} -gt 0 ]; then
+    pending_offsets+=("${failed_next_round[@]}")
+    echo "[$(date)] ${#failed_next_round[@]} arrays failed; retrying them in $sleep_between_retries s…"
     sleep "$sleep_between_retries"
-    attempt=$((attempt+1))
-  else
-    echo "[$(date)] All batches submitted successfully!"
   fi
+
+  attempt=$((attempt+1))
 done
+
+echo "[$(date)] All arrays submitted under throttle. Done."
