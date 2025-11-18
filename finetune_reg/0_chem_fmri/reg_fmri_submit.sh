@@ -8,12 +8,14 @@ source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment
 
 compute_total() {
   echo $(( ${#datasets[@]} * ${#subjects[@]} * ${#n_folds[@]} \
+  echo $(( ${#datasets[@]} * ${#subjects[@]} * ${#n_folds[@]} \
          * ${#n_components[@]} * ${#models[@]} * ${#rois[@]} \
          * ${#trs[@]} * ${#z_scores[@]} ))
 }
 
 mkdir -p logs
 total_jobs=$(compute_total)
+
 
 
 export OUT_DIR="${OUT_DIR:-May15_reg}"

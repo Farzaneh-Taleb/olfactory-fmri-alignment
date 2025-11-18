@@ -19,13 +19,14 @@ export PYTHONNOUSERSITE=1
 PYTHON_EXEC="$(which python)"
 
 # --- Load FMRI grid ---
-source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/fmri_finetune_grid.sh"
+source "/cfs/klemming/projects/supr/olfactory_alignment/olfactory-fmri-alignment-NEW/finetune_reg/finetune_reg/fmri_finetune_finetune_grid.sh"
 
 # --- Index math ---
 index=${SLURM_ARRAY_TASK_ID}
 
 num_datasets=${#datasets[@]}
 num_subjects=${#subjects[@]}
+num_folds=${#n_folds[@]}
 num_folds=${#n_folds[@]}
 num_components=${#n_components[@]}
 num_models=${#models[@]}
@@ -50,6 +51,7 @@ zs_idx=$(( index % num_zs ))
 ds=${datasets[$ds_idx]}
 subject=${subjects[$subj_idx]}
 n_fold=${n_folds[$fold_idx]}
+n_fold=${n_folds[$fold_idx]}
 n_comp=${n_components[$ncomp_idx]}
 model=${models[$model_idx]}
 roi=${rois[$roi_idx]}
@@ -62,6 +64,7 @@ OUT_DIR="${OUT_DIR:-May15_reg}"
 
 echo "RUN_ID=$RUN_ID"
 echo "Using Python: $PYTHON_EXEC"
+# $PYTHON_EXEC -V
 # $PYTHON_EXEC -V
 
 echo "Config:"

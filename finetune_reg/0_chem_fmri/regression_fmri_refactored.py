@@ -54,15 +54,16 @@ def main():
     z_score = args.z_score
     ds = args.ds  # use dataset from args for consistency with your other script
     embed_type='can'
-    embed_cols = args.behavior_embeddings or get_descriptors(ds)
+    # embed_cols = args.behavior_embeddings or get_descriptors(ds)
     run_id=args.run_id
     
     tr = args.tr
     
     # If TR=-1, choose the peak TR from P_VALUES for this ROI/subject
+    roi = args.roi
     i_roi = ROIS.index(roi)
     tr_orig = tr
-    roi = args.roi
+    
 
     if tr == -1:
         tr = P_VALUES[i_roi][participant_id - 1]
@@ -92,8 +93,8 @@ def main():
             fmri_test = slice_fmri_by_cids(fmri_data, cids, test_cids)
 
             # Embeddings (X)
-            train_emb = load_model_embeddings(ds, model_name, train_cids, layer, embed_type='can')
-            test_emb = load_model_embeddings(ds, model_name, test_cids, layer, embed_type='can')
+            train_emb = load_model_embeddings(ds, model_name, train_cids, layer, embed_type=embed_type)
+            test_emb = load_model_embeddings(ds, model_name, test_cids, layer, embed_type=embed_type)
 
             train_embeddings.append(train_emb)
             test_embeddings.append(test_emb)
