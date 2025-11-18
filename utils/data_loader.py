@@ -12,6 +12,8 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from .config import BASE_DIR
 from pathlib import Path
+from scipy import stats
+import scipy.io as sio
 def load_embeddings(model_name, layer, z_score=False):
     """
     Load and optionally standardize embeddings.
@@ -215,7 +217,7 @@ def fix_csv_with_header(in_path, out_path):
 
 
 def load_finetuned_model_embeddings(*, ds: str, model_name: str, cids, layer: int,
-                          out_dir: str, run_id: str, i_fold: int,embed_type: str, participant_id: int,unfreeze_last_n,behavior_embeddings):
+                          out_dir: str, run_id: str, i_fold: int,embed_type: str, participant_id: int,unfreeze_last_n,behavior_embeddings,n_fold):
     """
     Load saved token[0] hidden-state embeddings for a specific (model, ds, layer, fold)
     and return an array aligned to 'cids' (order-preserving).
@@ -224,7 +226,7 @@ def load_finetuned_model_embeddings(*, ds: str, model_name: str, cids, layer: in
     embeds_dir = Path(BASE_DIR) / f"{out_dir}_fembeddings_{run_id}"
     
     # csv_path_old = embeds_dir / f"reps_{model_name}_ds-{ds}_runid-{run_id}.csv"
-    csv_path = embeds_dir / f"reps_{model_name}_ds-{ds}_runid-{run_id}_unfreeze-{unfreeze_last_n}_behavior_embeddings-{behavior_embeddings}.csv"
+    csv_path = embeds_dir / f"reps_{model_name}_ds-{ds}_runid-{run_id}_unfreeze-{unfreeze_last_n}_behaviorembeddings-{behavior_embeddings}_nfold_{n_fold}.csv"
     #check if csv_path exists if not
     # if not csv_path.exists():
     #     print(f"Fixing CSV file: {csv_path_old} -> {csv_path}")
@@ -424,3 +426,57 @@ def slice_fmri_by_cids(fmri_data, all_cids, selected_cids):
 #         targets_test.append(target_test)
     
 #     return embeddings_train, embeddings_test, targets_train, targets_test
+def read_fmri(BASE_DIR, participant_id, selected_roi,tr):
+    # % Max FIR times for [PirF, PirT, AMY and OFC];
+    # P = [[5, 5, 5], [4, 4, 5], [4, 3, 4], [3, 3, 5]]
+    parent_input_sagar_original = BASE_DIR + f'/fmri/NEMO_scripts-master/odor_responses_S1-3_regionized/odor_responses_S{participant_id}.mat'
+        # --- Load CSV as DataFrame ---
+    df_behavior = pd.read_csv(f"{BASE_DIR}/DATASETS/datasets/sagar2023/sagar2023_data.csv")
+    df_behavior = df_behavior[df_behavior["participant_id"] == participant_id].copy()
+
+    # --- Sort by cid first ---
+    df_behavior = df_behavior.sort_values(by="cid").reset_index(drop=True)
+    cids = df_behavior['cid'].to_list()              
+    data = sio.loadmat(parent_input_sagar_original)
+
+    if selected_roi == 'PirF':
+        # pi = P[0][subject_id - 1]
+        roi = data['odor_vals'][0][0][:,tr,:]
+        # print(roi.shape,roi,"sssss")
+
+
+    elif selected_roi == 'PirT':
+        # pi = P[1][subject_id - 1]
+        roi = data['odor_vals'][0][1][:,tr,:]
+
+    elif selected_roi == 'AMY':
+        # pi = P[2][subject_id - 1]
+        roi = data['odor_vals'][0][2][:,tr,:]
+    elif selected_roi == 'OFC':
+        # pi = P[3][subject_id - 1]
+        roi = data['odor_vals'][0][3][:,tr,:]
+    elif selected_roi == 'ALL':
+        roi1 = data['odor_vals'][0][0][:,tr,:]
+        roi2 = data['odor_vals'][0][1][:,tr,:]
+        roi3 = data['odor_vals'][0][2][:,tr,:]
+        roi4 = data['odor_vals'][0][3][:,tr,:]
+        roi = np.concatenate((roi1,roi2,roi3,roi4),axis=0)
+
+
+    roi = np.moveaxis(roi, -1, 0)
+
+    # print("sssss",roi.shape)
+    return roi,cids
+
+def load_fmri_data(subject: int, roi: str, tr: int, z_score: bool = False):
+    """
+    Returns:
+        fmri: np.ndarray [n_cids x n_voxels]
+        cids: np.ndarray[int] aligned with fmri rows (int64)
+    """
+    fmri, cids = read_fmri(BASE_DIR, subject, roi, tr)
+    cids = np.asarray(cids, dtype=np.int64)
+    if z_score:
+        fmri = stats.zscore(fmri, axis=0, nan_policy="omit")
+        fmri = np.nan_to_num(fmri, nan=0.0)
+    return fmri, cids

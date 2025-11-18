@@ -1,6 +1,3 @@
-
-
-
 import pandas as pd
 import numpy as np
 import ast
@@ -18,11 +15,13 @@ import pandas as pd
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset as TorchDataset
-from .data_loader import load_behavior_embeddings
+from .data_loader import load_behavior_embeddings, slice_fmri_by_cids, load_fmri_data
 from datasets import Dataset as HFDataset
 from .config import BASE_DIR
 # sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from .config import SEED
+from scipy import stats
+
 mid_dir='data'
 from transformers import (
     AutoTokenizer,
@@ -201,41 +200,7 @@ def read_fmri_avgSingleTrial_dropna(BASE_DIR, subject_id, selected_roi,dro_voxel
 
     return fmri_array_cleaned
 
-def read_fmri(BASE_DIR, participant_id, selected_roi,tr):
-    # % Max FIR times for [PirF, PirT, AMY and OFC];
-    # P = [[5, 5, 5], [4, 4, 5], [4, 3, 4], [3, 3, 5]]
-    parent_input_sagar_original = BASE_DIR + f'/fmri/NEMO_scripts-master/odor_responses_S1-3_regionized/odor_responses_S{participant_id}.mat'
-        # --- Load CSV as DataFrame ---
-    df_behavior = pd.read_csv(f"{BASE_DIR}/DATASETS/datasets/sagar2023/sagar2023_data.csv")
-    df_behavior = df_behavior[df_behavior["participant_id"] == participant_id].copy()
 
-    # --- Sort by cid first ---
-    df_behavior = df_behavior.sort_values(by="cid").reset_index(drop=True)
-    cids = df_behavior['cid'].to_list()              
-    data = sio.loadmat(parent_input_sagar_original)
-
-    if selected_roi == 'PirF':
-        # pi = P[0][subject_id - 1]
-        roi = data['odor_vals'][0][0][:,tr,:]
-        # print(roi.shape,roi,"sssss")
-
-
-    elif selected_roi == 'PirT':
-        # pi = P[1][subject_id - 1]
-        roi = data['odor_vals'][0][1][:,tr,:]
-
-    elif selected_roi == 'AMY':
-        # pi = P[2][subject_id - 1]
-        roi = data['odor_vals'][0][2][:,tr,:]
-    elif selected_roi == 'OFC':
-        # pi = P[3][subject_id - 1]
-        roi = data['odor_vals'][0][3][:,tr,:]
-
-
-    roi = np.moveaxis(roi, -1, 0)
-
-    # print("sssss",roi.shape)
-    return roi,cids
 
 def prepare_dataset(ds):
     if 'y' in ds.columns:
@@ -500,7 +465,12 @@ def build_hf_text_dataset_for_cids(
     participant_id,
     behavior_embeddings,   # whatever your loader accepts (indices or names)
     cids,
-    input_type
+    input_type,
+    finetune_by='beh'
+    #add optional tr for fmri
+    ,roi=None
+    ,tr=None
+    
 ):
     """
     Returns (hf_dataset, num_targets) where hf_dataset has:
@@ -509,20 +479,28 @@ def build_hf_text_dataset_for_cids(
     Row order matches `cids`.
     """
     # y: your existing loader (handles selection/aggregation)
-    y_np = load_behavior_embeddings(
-        ds=ds,
-        cids=cids,
-        participant_id=participant_id,
-        embed_cols=behavior_embeddings,
-        group_by_cid=True,
-    )
-    
-    print(behavior_embeddings)
-    y_df = pd.DataFrame(y_np, columns=behavior_embeddings)
+
+    if finetune_by=='beh':
+        y_np = load_behavior_embeddings(
+            ds=ds,
+            cids=cids,
+            participant_id=participant_id,
+            embed_cols=behavior_embeddings,
+            group_by_cid=True,
+        )
+    elif finetune_by=='fmri':
+        fmri_data, all_cids = load_fmri_data(participant_id, roi, tr, z_score=False)        
+
+            # fMRI slices (keeps CID order by masking)
+        y_np = slice_fmri_by_cids(fmri_data, all_cids, cids)
+        
+    else:
+        raise ValueError("finetune_by must be 'beh' or 'fmri'", finetune_by)
+        
+    columns = [f"prop{i}" for i in range(y_np.shape[1])]
+    y_df = pd.DataFrame(y_np, columns=columns)
 
     # rename behavior columns to prop0..propK-1
-    rename_map = {col: f"prop{i}" for i, col in enumerate(behavior_embeddings)}
-    y_df = y_df.rename(columns=rename_map)
     # x: molecule strings (Series aligned to cids order)
     texts = _load_text_for_cids( ds, cids,participant_id, input_type=input_type)
 
@@ -530,22 +508,22 @@ def build_hf_text_dataset_for_cids(
     df = pd.DataFrame({input_type: texts}).reset_index(drop=True)
     df = pd.concat([df, y_df.reset_index(drop=True)], axis=1)
     ds_hf = HFDataset.from_pandas(df)
-    return ds_hf, len(behavior_embeddings)
+    return ds_hf, y_np.shape[1]
 
 
 
 @torch.no_grad()
 def extract_representations(
-    *, cids, participant_id, input_type, out_csv: Path,
+    *, cids, participant_dest, input_type, out_csv: Path,
     tokenizer: AutoTokenizer, model: AutoModel, model_name: str,
-    n_fold: int, i_fold: int, subject: int,
+    n_fold: int, i_fold: int,
     behavior_embeddings: str, unfreeze_last_n: int, ds: str,
-     token_index: int = 0,embed_type: str='can'
+     token_index: int = 0,embed_type: str='can',participant_source:int = None
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval().to(device)
 
-    texts_df = _load_text_for_cids(ds, cids, participant_id, input_type=input_type)
+    texts_df = _load_text_for_cids(ds, cids, participant_dest, input_type=input_type)
     
     texts  = texts_df.astype(str).tolist() 
     assert len(texts) == len(cids), f"Length mismatch: texts={len(texts)} vs cids={len(cids)}"
@@ -554,6 +532,9 @@ def extract_representations(
     hidden_states = model(**inputs, output_hidden_states=True).hidden_states
 
     rows = []
+
+    if participant_source is None:
+        participant_source= participant_dest
     for layer_idx, hs in enumerate(hidden_states):
         arr = hs[:, token_index, :].detach().cpu().numpy()  # [N, D]
         for mol_idx, vec in enumerate(arr):
@@ -561,12 +542,13 @@ def extract_representations(
                 "layer": layer_idx,
                 "cid": str(cids[mol_idx]),
                 "model": model_name,
-                "participant_id": subject,
+                "participant_id": participant_dest,
                 "n_fold": n_fold,
                 "i_fold": i_fold,
                 "behavior_embeddings": behavior_embeddings,
                 "unfreeze_last_n": unfreeze_last_n,
-                "ds": ds
+                "ds": ds,
+                "participant_source_id": participant_source,
             }
             for d, val in enumerate(vec):
                 row[f"{embed_type}_e{d}"] = float(val)
@@ -587,7 +569,210 @@ def build_models_dir(out_dir: str, run_id: str) -> Path:
 def build_embeds_dir(out_dir: str, run_id: str) -> Path:
     # keep run_id to avoid collisions across runs
     return Path(BASE_DIR) / f"{out_dir}_fembeddings_{run_id}"
+
+def build_transfer_embeds_dir(out_dir: str, run_id: str) -> Path:
+    # keep run_id to avoid collisions across runs
+    return Path(BASE_DIR) / f"{out_dir}_transferred_fembeddings_{run_id}"
 def append_csv(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     exists = path.exists()
     df.to_csv(path, mode=("a" if exists else "w"), header=not exists, index=False)
+
+
+# # --- Progressive unfreezing helpers -----------------------------------------
+# def _get_encoder_layers(model):
+#     """
+#     Try to locate the list/ModuleList of encoder blocks for common HF models.
+#     Returns (layers, total_layers). layers can be an iterable of blocks or None.
+#     """
+#     enc = getattr(model, model.base_model_prefix, None)
+#     for attr in ["encoder", "transformer", "layers"]:
+#         enc = getattr(enc, attr, enc)
+#     layers = None
+#     for attr in ["layer", "layers", "h"]:
+#         layers = getattr(enc, attr, None) if enc is not None else None
+#         if layers is not None:
+#             break
+#     if hasattr(layers, "__len__"):
+#         return layers, len(layers)
+#     return None, 0
+
+
+# finetune_utils/progressive_unfreeze.py
+from typing import Optional, Tuple, List
+from transformers import TrainerCallback
+import math
+import torch
+
+def _is_norm_or_bias(name: str) -> bool:
+    nl = name.lower()
+    return (
+        nl.endswith(".bias")
+        or "norm" in nl
+        or "layernorm" in nl
+        or "rmsnorm" in nl
+        or "layer_norm" in nl
+    )
+
+def _get_encoder_layers(model) -> Tuple[Optional[List[torch.nn.Module]], int]:
+    """
+    Try to find the stack of encoder blocks across common HF backbones.
+    Returns (layers_list_like, total_layers).
+    """
+    enc = getattr(model, getattr(model, "base_model_prefix", ""), None)
+    if enc is None:
+        # fallbacks for some models
+        for attr in ["roberta", "bert", "backbone", "transformer", "model"]:
+            enc = getattr(model, attr, None)
+            if enc is not None:
+                break
+    # dive into encoder containers
+    for attr in ["encoder", "transformer", "layers"]:
+        enc = getattr(enc, attr, enc)
+    layers = None
+    for attr in ["layer", "layers", "h", "blocks"]:
+        layers = getattr(enc, attr, None) if enc is not None else None
+        if hasattr(layers, "__len__"):
+            break
+    total = len(layers) if hasattr(layers, "__len__") else 0
+    return layers, total
+
+def freeze_all_but_head(model):
+    """
+    Freeze everything except classification/regression heads and all norms/biases
+    (norms/bias kept trainable for stability).
+    """
+    for name, p in model.named_parameters():
+        if any(k in name for k in ["classifier", "regression", "score", "lm_head"]):
+            p.requires_grad = True
+        elif _is_norm_or_bias(name):
+            p.requires_grad = True
+        else:
+            p.requires_grad = False
+
+def apply_unfreeze_last_n(model, last_n):
+    """
+    Make the last `last_n` encoder blocks trainable (plus norms/bias + heads always trainable).
+    If last_n is None or 0 -> only head + norms/bias are trainable.
+    If last_n >= 1e6 -> unfreeze all blocks.
+    """
+    layers, total = _get_encoder_layers(model)
+    freeze_all_but_head(model)  # baseline: head + norms/bias trainable
+
+    if layers is None or total == 0 or not last_n:
+        return
+
+    # sentinel for "all"
+    if isinstance(last_n, (int, float)) and last_n >= 1_000_000:
+        keep_start = 0
+    else:
+        keep_start = max(0, total - int(last_n))
+
+    for i, block in enumerate(layers):
+        req_grad = i >= keep_start
+        for n, p in block.named_parameters(recurse=True):
+            if _is_norm_or_bias(n):
+                p.requires_grad = True
+            else:
+                p.requires_grad = req_grad
+
+    # (optional) if fully unfrozen, also unfreeze embeddings fully
+    if keep_start == 0:
+        for name, p in model.named_parameters():
+            if "embeddings" in name and not _is_norm_or_bias(name):
+                p.requires_grad = True
+
+class ProgressiveUnfreezeCallback(TrainerCallback):
+    """
+    Unfreeze schedule like [(0,0), (1,2), (3,4), (5,"all")].
+    - "all" is normalized to a large sentinel.
+    - Plan is clamped to num_train_epochs on train begin.
+    - Applies epoch-0 state immediately on train begin.
+    - Rebuilds optimizer & scheduler whenever trainable params change.
+    """
+    def __init__(self, schedule):
+        norm = []
+        for ep, n in schedule:
+            if isinstance(n, str) and n.lower() == "all":
+                n = 1_000_000
+            norm.append((int(ep), None if n in (None, "", "None", 0) else int(n)))
+        self.schedule = sorted(norm, key=lambda x: x[0])
+
+        self._active_schedule = self.schedule
+        self._applied_epoch = None
+        self._last_n_applied = None
+        self.trainer = None  # set externally: prog_cb.trainer = trainer
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        # hard reset in case the same instance is reused
+        self._applied_epoch = None
+        self._last_n_applied = None
+        self._active_schedule = self.schedule
+
+        # Clamp milestones to trial's epoch budget (epochs = 0..n_ep-1)
+        n_ep = int(args.num_train_epochs)
+        self._active_schedule = [(ep, n) for ep, n in self.schedule if ep < n_ep]
+
+        # Apply initial (epoch 0) state right away
+        last_n = self._last_n_for_epoch(0)
+        self._apply_and_refresh(last_n, current_epoch=0)
+        return control
+
+    def _last_n_for_epoch(self, epoch: int):
+        last_n = None
+        for ep, n in self._active_schedule:
+            if epoch >= ep:
+                last_n = n
+            else:
+                break
+        return last_n
+
+    def _rebuild_optim_and_sched(self):
+        tr = self.trainer
+        if tr is None:
+            return
+        args = tr.args
+        state = tr.state
+
+        # Rebuild optimizer so newly-unfrozen params are included
+        tr.optimizer = None
+        tr.create_optimizer()
+
+        # Rebuild LR scheduler with remaining steps
+        train_loader = tr.get_train_dataloader()
+        gas = max(1, args.gradient_accumulation_steps)
+        steps_per_epoch = max(1, math.ceil(len(train_loader) / gas))
+        cur_ep = int(state.epoch or 0)
+        epochs_left = max(0, int(args.num_train_epochs) - cur_ep)
+        remaining_steps = max(1, steps_per_epoch * epochs_left)
+
+        tr.lr_scheduler = None
+        tr.create_scheduler(num_training_steps=remaining_steps)
+
+    def _apply_and_refresh(self, last_n, current_epoch: int):
+        # Only re-apply if change
+        if self._applied_epoch is None or self._last_n_applied != last_n:
+            tr = self.trainer
+            if tr is None:
+                return
+            apply_unfreeze_last_n(tr.model, last_n)
+            self._applied_epoch = current_epoch
+            self._last_n_applied = last_n
+
+            # Report trainable stats
+            m = tr.model
+            tot = sum(p.numel() for p in m.parameters())
+            trn = sum(p.numel() for p in m.parameters() if p.requires_grad)
+            print(f"[ProgressiveUnfreeze] epoch={current_epoch} -> last_n={last_n} "
+                  f"trainable={trn}/{tot} ({trn/tot:.2%})")
+
+            # Ensure optimizer/scheduler include new params
+            self._rebuild_optim_and_sched()
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        cur_epoch = int(state.epoch or 0)
+        last_n = self._last_n_for_epoch(cur_epoch)
+        self._apply_and_refresh(last_n, current_epoch=cur_epoch)
+        return control
+
+
